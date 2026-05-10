@@ -1,6 +1,6 @@
 -- GameManager.lua
--- Route Rage — ServerScript for round & game state (action / combat / health / vehicle)
--- Place in: ServerScriptService
+-- Route Rage World — ServerScript (place in ServerScriptService)
+-- Manages world-builder, starter-suburbs, spawn-pads, hazard-props, shortcuts
 
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -12,282 +12,305 @@ local WorldConfig = require(script.Parent:WaitForChild("WorldConfig"))
 -- ── DataStore ────────────────────────────────────────────────────────────────
 local gameDataStore = DataStoreService:GetDataStore("GameData_v1")
 
--- ── Remotes folder ───────────────────────────────────────────────────────────
+-- ── Remotes setup ────────────────────────────────────────────────────────────
 local remotes = ReplicatedStorage:FindFirstChild("Remotes")
 if not remotes then
 	remotes = Instance.new("Folder")
-	remotes.Name   = "Remotes"
+	remotes.Name = "Remotes"
 	remotes.Parent = ReplicatedStorage
 end
 
 local function getOrCreate(name, class)
 	local obj = remotes:FindFirstChild(name)
 	if not obj then
-		obj        = Instance.new(class)
-		obj.Name   = name
+		obj = Instance.new(class)
+		obj.Name = name
 		obj.Parent = remotes
 	end
 	return obj
 end
 
--- Combat remotes
-local dealDamage      = getOrCreate("DealDamage",      "RemoteEvent")  -- server: apply damage
-local updateKills     = getOrCreate("UpdateKills",      "RemoteEvent")  -- server→client: kill count
-local notifyDeath     = getOrCreate("NotifyDeath",      "RemoteEvent")  -- server→client: you died
+-- One remote per mechanic
+local worldBuilderEvent  = getOrCreate("WorldBuilder",    "RemoteEvent")
+local starterSuburbsEvent= getOrCreate("StarterSuburbs",  "RemoteEvent")
+local spawnPadsEvent     = getOrCreate("SpawnPads",       "RemoteEvent")
+local hazardPropsEvent   = getOrCreate("HazardProps",     "RemoteEvent")
+local shortcutsEvent     = getOrCreate("Shortcuts",       "RemoteEvent")
 
--- Health remotes
-local updateHealth    = getOrCreate("UpdateHealth",     "RemoteEvent")  -- server→client: current HP
-local requestHeal     = getOrCreate("RequestHeal",      "RemoteEvent")  -- client→server: use health pack
-local syncHealthPacks = getOrCreate("SyncHealthPacks",  "RemoteEvent")  -- server→client: pack positions
-
--- Vehicle remotes
-local requestVehicle  = getOrCreate("RequestVehicle",   "RemoteEvent")  -- client→server: enter vehicle
-local ejectVehicle    = getOrCreate("EjectVehicle",     "RemoteEvent")  -- client→server: exit vehicle
-local updateVehicle   = getOrCreate("UpdateVehicle",    "RemoteEvent")  -- server→client: vehicle state
-
--- General
-local updateTimer     = getOrCreate("UpdateTimer",      "RemoteEvent")  -- server→client: round timer
+-- Utility broadcast
+local function fireAll(event, ...)
+	for _, p in ipairs(Players:GetPlayers()) do
+		event:FireClient(p, ...)
+	end
+end
 
 -- ── Game state ───────────────────────────────────────────────────────────────
 local State = {
-	phase       = "Waiting",   -- Waiting | Intermission | Active
-	killCounts  = {},          -- [userId] = kills
-	roundEndsAt = 0,
-	vehicles    = {},          -- [vehicleModel] = { driver = player | nil, health = number }
-	healthPacks = {},          -- [packModel] = { available = bool, respawnAt = number }
+	phase           = "Waiting",   -- Waiting | Active | Intermission
+	playerData      = {},          -- [userId] -> persistent data table
+	activePads      = {},          -- [padId]  -> { owner, cooldownUntil }
+	activeHazards   = {},          -- [hazardId] -> { isActive, resetAt }
+	unlockedShortcuts = {},        -- [userId]  -> list of unlocked shortcut ids
+	placedObjects   = {},          -- [userId]  -> list of placed world objects
 }
 
-local MIN_PLAYERS  = WorldConfig.MinPlayers or 2
-local VEHICLE_HP   = WorldConfig.VehicleHealth   or 200
-local PACK_AMOUNT  = WorldConfig.HealthPackAmount or 50
-local PACK_RESPAWN = WorldConfig.HealthPackRespawn or 20  -- seconds
+local MIN_PLAYERS = WorldConfig.MinPlayers or 2
 
--- ── Default player data structure ────────────────────────────────────────────
-local function defaultData()
+-- ── Default player data ───────────────────────────────────────────────────────
+local function defaultPlayerData()
 	return {
-		kills    = 0,
-		deaths   = 0,
-		currency = 0,
+		coins        = 0,
+		buildTokens  = 10,          -- currency for world-builder
+		suburb       = "Default",   -- current suburb assignment
+		kills        = 0,
+		deaths       = 0,
+		shortcuts    = {},          -- unlocked shortcut ids
+		placedObjects= {},          -- serialised placed objects
 	}
 end
 
--- ── Per-player live session data ──────────────────────────────────────────────
-local sessionData = {}   -- [userId] = merged persistent + live data
-
--- ── Save & load helpers ───────────────────────────────────────────────────────
+-- ── DataStore: load ───────────────────────────────────────────────────────────
 local function loadPlayerData(player)
-	local userId = player.UserId
-	local data   = defaultData()
-
+	local uid = player.UserId
 	local ok, result = pcall(function()
-		return gameDataStore:GetAsync("player_" .. userId)
+		return gameDataStore:GetAsync(tostring(uid))
 	end)
-
 	if ok and result then
-		-- Merge saved fields; keep defaults for any missing keys
+		-- Merge saved data over defaults so new fields are always present
+		local data = defaultPlayerData()
 		for k, v in pairs(result) do
 			data[k] = v
 		end
-	elseif not ok then
-		warn("[GameManager] DataStore load failed for", player.Name, ":", result)
+		State.playerData[uid] = data
+	else
+		if not ok then
+			warn("[GameManager] LoadPlayerData failed for", player.Name, ":", result)
+		end
+		State.playerData[uid] = defaultPlayerData()
 	end
-
-	sessionData[userId] = data
-	State.killCounts[userId] = data.kills  -- carry kills for display (reset on round start)
-	return data
+	return State.playerData[uid]
 end
 
+-- ── DataStore: save ───────────────────────────────────────────────────────────
 local function savePlayerData(player)
-	local userId = player.UserId
-	local data   = sessionData[userId]
+	local uid  = player.UserId
+	local data = State.playerData[uid]
 	if not data then return end
 
 	local ok, err = pcall(function()
-		gameDataStore:SetAsync("player_" .. userId, data)
+		gameDataStore:SetAsync(tostring(uid), data)
 	end)
-
 	if not ok then
-		warn("[GameManager] DataStore save failed for", player.Name, ":", err)
+		warn("[GameManager] SavePlayerData failed for", player.Name, ":", err)
 	end
 end
 
--- ── Vehicle helpers ───────────────────────────────────────────────────────────
-local function initVehicles()
-	-- Expects WorldConfig.Vehicles = { { model = Instance, spawnCFrame = CFrame }, ... }
-	if not WorldConfig.Vehicles then return end
-	for _, vConfig in ipairs(WorldConfig.Vehicles) do
-		local model = vConfig.model
-		if model and model:IsA("Model") then
-			State.vehicles[model] = {
-				driver  = nil,
-				health  = VEHICLE_HP,
-				spawnCF = vConfig.spawnCFrame,
-			}
+-- ── Spawn helpers ─────────────────────────────────────────────────────────────
+local function getDefaultSpawnCFrame()
+	-- WorldConfig.DefaultArea should expose a SpawnPoint CFrame or Vector3
+	local area = WorldConfig.DefaultArea
+	if area and area.SpawnPoint then
+		return CFrame.new(area.SpawnPoint)
+	end
+	return CFrame.new(0, 5, 0) -- fallback origin
+end
+
+local function spawnAtDefaultArea(player)
+	local char = player.Character
+	if char then
+		local root = char:FindFirstChild("HumanoidRootPart")
+		if root then
+			root.CFrame = getDefaultSpawnCFrame()
 		end
 	end
 end
 
-local function respawnVehicle(model)
-	local vData = State.vehicles[model]
-	if not vData then return end
-	vData.driver = nil
-	vData.health = VEHICLE_HP
-	-- Teleport model back to spawn position
-	local root = model:FindFirstChild("PrimaryPart") or model.PrimaryPart
-	if root and vData.spawnCF then
-		model:SetPrimaryPartCFrame(vData.spawnCF)
-	end
-	model.Parent = workspace
-	-- Notify all clients of fresh vehicle state
-	for _, p in ipairs(Players:GetPlayers()) do
-		updateVehicle:FireClient(p, model, { driver = nil, health = VEHICLE_HP })
-	end
+-- ── Spawn Pads mechanic ───────────────────────────────────────────────────────
+local PAD_COOLDOWN = WorldConfig.SpawnPadCooldown or 5  -- seconds
+
+local function registerSpawnPad(padId, owner)
+	State.activePads[padId] = { owner = owner, cooldownUntil = 0 }
+	spawnPadsEvent:FireClient(owner, "Registered", padId)
 end
 
-local function applyVehicleDamage(model, amount)
-	local vData = State.vehicles[model]
-	if not vData then return end
-	vData.health = math.max(0, vData.health - amount)
-
-	-- Eject driver if vehicle destroyed
-	if vData.health <= 0 and vData.driver then
-		ejectVehicle:FireClient(vData.driver, model, "destroyed")
-		vData.driver = nil
-		-- Respawn vehicle after delay
-		task.delay(WorldConfig.VehicleRespawnTime or 15, function()
-			respawnVehicle(model)
-		end)
-	else
-		-- Sync health to all clients
-		for _, p in ipairs(Players:GetPlayers()) do
-			updateVehicle:FireClient(p, model, { driver = vData.driver, health = vData.health })
-		end
+local function useSpawnPad(player, padId)
+	local pad = State.activePads[padId]
+	if not pad then return false end
+	if os.clock() < pad.cooldownUntil then
+		spawnPadsEvent:FireClient(player, "Cooldown", padId, math.ceil(pad.cooldownUntil - os.clock()))
+		return false
 	end
-end
-
--- ── Health pack helpers ───────────────────────────────────────────────────────
-local function initHealthPacks()
-	-- Expects WorldConfig.HealthPacks = { Instance (Part/Model), ... }
-	if not WorldConfig.HealthPacks then return end
-	for _, pack in ipairs(WorldConfig.HealthPacks) do
-		State.healthPacks[pack] = { available = true, respawnAt = 0 }
-	end
-	-- Tell joining clients where packs are
-end
-
-local function useHealthPack(player, pack)
-	local packData = State.healthPacks[pack]
-	if not packData or not packData.available then return false end
-
-	local char      = player.Character
-	local humanoid  = char and char:FindFirstChildOfClass("Humanoid")
-	if not humanoid or humanoid.Health <= 0 then return false end
-
-	-- Heal the player
-	humanoid.Health = math.min(humanoid.MaxHealth, humanoid.Health + PACK_AMOUNT)
-	updateHealth:FireClient(player, humanoid.Health, humanoid.MaxHealth)
-
-	-- Disable pack visually
-	packData.available = false
-	packData.respawnAt = os.clock() + PACK_RESPAWN
-	if pack:IsA("BasePart") or pack:IsA("Model") then
-		pack.Parent = nil  -- hide from workspace temporarily
-	end
-
-	-- Respawn pack after cooldown
-	task.delay(PACK_RESPAWN, function()
-		if State.healthPacks[pack] then
-			State.healthPacks[pack].available = true
-			pack.Parent = workspace
-			-- Sync pack list to all clients
-			for _, p in ipairs(Players:GetPlayers()) do
-				syncHealthPacks:FireClient(p, pack, true)
+	pad.cooldownUntil = os.clock() + PAD_COOLDOWN
+	-- Teleport player to the pad's world position
+	local padConfig = WorldConfig.SpawnPads and WorldConfig.SpawnPads[padId]
+	if padConfig and padConfig.Position then
+		local char = player.Character
+		if char then
+			local root = char:FindFirstChild("HumanoidRootPart")
+			if root then
+				root.CFrame = CFrame.new(padConfig.Position)
 			end
 		end
-	end)
+	end
+	spawnPadsEvent:FireClient(player, "Used", padId)
 	return true
 end
 
--- ── Combat helpers ────────────────────────────────────────────────────────────
-local DAMAGE_COOLDOWN = {}  -- simple rate-limit [userId] = lastHitTime
+-- ── Hazard Props mechanic ─────────────────────────────────────────────────────
+local HAZARD_RESET_TIME = WorldConfig.HazardResetTime or 10
 
-local function applyCombatDamage(attacker, victimChar, amount)
-	if not victimChar then return end
-	local humanoid = victimChar:FindFirstChildOfClass("Humanoid")
-	if not humanoid or humanoid.Health <= 0 then return end
-
-	-- Rate-limit: one hit per 0.1 s per attacker to prevent spam
-	local uid = attacker.UserId
-	local now = os.clock()
-	if (DAMAGE_COOLDOWN[uid] or 0) + 0.1 > now then return end
-	DAMAGE_COOLDOWN[uid] = now
-
-	-- Tag victim with creator so death handler can award kill
-	local tag = humanoid:FindFirstChild("creator") or Instance.new("ObjectValue")
-	tag.Name   = "creator"
-	tag.Value  = attacker
-	tag.Parent = humanoid
-	game:GetService("Debris"):AddItem(tag, 3)  -- auto-clean tag
-
-	humanoid:TakeDamage(amount)
-
-	-- Sync health to the victim
-	local victim = Players:GetPlayerFromCharacter(victimChar)
-	if victim then
-		updateHealth:FireClient(victim, humanoid.Health, humanoid.MaxHealth)
+local function initHazards()
+	local hazardList = WorldConfig.HazardProps or {}
+	for _, h in ipairs(hazardList) do
+		State.activeHazards[h.id] = { isActive = true, resetAt = 0 }
 	end
 end
 
--- ── Character lifecycle ───────────────────────────────────────────────────────
-local function spawnAtDefault(player)
-	local char = player.Character
-	if not char then return end
-	local root = char:FindFirstChild("HumanoidRootPart")
-	if not root then return end
+local function triggerHazard(hazardId, triggeringPlayer)
+	local hazard = State.activeHazards[hazardId]
+	if not hazard or not hazard.isActive then return end
+	hazard.isActive = false
+	hazard.resetAt  = os.clock() + HAZARD_RESET_TIME
+	-- Notify all clients so they can play effects
+	fireAll(hazardPropsEvent, "Triggered", hazardId)
+	-- Schedule hazard reset
+	task.delay(HAZARD_RESET_TIME, function()
+		if State.activeHazards[hazardId] then
+			State.activeHazards[hazardId].isActive = true
+			fireAll(hazardPropsEvent, "Reset", hazardId)
+		end
+	end)
+end
 
-	local area    = WorldConfig.DefaultArea
-	local spawns  = area and area.spawnPoints
-	if spawns and #spawns > 0 then
-		root.CFrame = CFrame.new(spawns[math.random(#spawns)])
+-- ── Shortcuts mechanic ────────────────────────────────────────────────────────
+local SHORTCUT_COST = WorldConfig.ShortcutCost or 50  -- coins
+
+local function unlockShortcut(player, shortcutId)
+	local uid  = player.UserId
+	local data = State.playerData[uid]
+	if not data then return false end
+
+	-- Check already unlocked
+	for _, id in ipairs(data.shortcuts) do
+		if id == shortcutId then
+			shortcutsEvent:FireClient(player, "AlreadyUnlocked", shortcutId)
+			return false
+		end
+	end
+
+	if data.coins < SHORTCUT_COST then
+		shortcutsEvent:FireClient(player, "InsufficientFunds", shortcutId)
+		return false
+	end
+
+	data.coins = data.coins - SHORTCUT_COST
+	table.insert(data.shortcuts, shortcutId)
+	shortcutsEvent:FireClient(player, "Unlocked", shortcutId)
+	return true
+end
+
+local function sendShortcutsToPlayer(player)
+	local uid  = player.UserId
+	local data = State.playerData[uid]
+	if data then
+		shortcutsEvent:FireClient(player, "Init", data.shortcuts)
 	end
 end
 
+-- ── World-Builder mechanic ────────────────────────────────────────────────────
+local MAX_PLACED = WorldConfig.MaxPlacedObjects or 20
+
+local function placeObject(player, objectType, cframe)
+	local uid  = player.UserId
+	local data = State.playerData[uid]
+	if not data then return false end
+
+	if #data.placedObjects >= MAX_PLACED then
+		worldBuilderEvent:FireClient(player, "LimitReached")
+		return false
+	end
+	if data.buildTokens <= 0 then
+		worldBuilderEvent:FireClient(player, "NoTokens")
+		return false
+	end
+
+	data.buildTokens = data.buildTokens - 1
+	local entry = { objectType = objectType, cf = cframe }
+	table.insert(data.placedObjects, entry)
+	-- Track in session state too
+	State.placedObjects[uid] = data.placedObjects
+
+	worldBuilderEvent:FireClient(player, "PlacedConfirm", objectType, cframe)
+	-- Notify others so they can render the object
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player then
+			worldBuilderEvent:FireClient(p, "RemotePlaced", player.UserId, objectType, cframe)
+		end
+	end
+	return true
+end
+
+local function removeObject(player, index)
+	local uid  = player.UserId
+	local data = State.playerData[uid]
+	if not data then return end
+	if not data.placedObjects[index] then return end
+
+	table.remove(data.placedObjects, index)
+	data.buildTokens = math.min(data.buildTokens + 1, MAX_PLACED) -- refund token
+	State.placedObjects[uid] = data.placedObjects
+	worldBuilderEvent:FireClient(player, "RemovedConfirm", index)
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player then
+			worldBuilderEvent:FireClient(p, "RemoteRemoved", player.UserId, index)
+		end
+	end
+end
+
+-- ── Starter Suburbs mechanic ──────────────────────────────────────────────────
+local SUBURBS = WorldConfig.StarterSuburbs or { "Willowdale", "Oakridge", "Mapleton" }
+
+local function assignSuburb(player)
+	local uid  = player.UserId
+	local data = State.playerData[uid]
+	if not data then return end
+	if data.suburb == "Default" then
+		-- Cycle assignment so suburbs fill evenly
+		local idx = (uid % #SUBURBS) + 1
+		data.suburb = SUBURBS[idx]
+	end
+	starterSuburbsEvent:FireClient(player, "Assigned", data.suburb)
+end
+
+local function getSuburbSpawnCFrame(suburbName)
+	if WorldConfig.Suburbs and WorldConfig.Suburbs[suburbName] then
+		return CFrame.new(WorldConfig.Suburbs[suburbName].SpawnPoint)
+	end
+	return getDefaultSpawnCFrame()
+end
+
+-- ── Kill/Death tracking ───────────────────────────────────────────────────────
 local function onCharacterAdded(player, char)
 	local humanoid = char:WaitForChild("Humanoid")
-
-	-- Immediately broadcast starting health
-	updateHealth:FireClient(player, humanoid.Health, humanoid.MaxHealth)
-
 	humanoid.Died:Connect(function()
 		local uid  = player.UserId
-		local data = sessionData[uid]
-		if data then data.deaths = (data.deaths or 0) + 1 end
-
-		-- Check creator tag for kill credit
-		local tag = humanoid:FindFirstChild("creator")
-		if tag and tag.Value and tag.Value ~= player then
-			local killer   = tag.Value
-			local killerId = killer.UserId
-			State.killCounts[killerId] = (State.killCounts[killerId] or 0) + 1
-			local kData = sessionData[killerId]
-			if kData then kData.kills = (kData.kills or 0) + 1 end
-			updateKills:FireClient(killer, State.killCounts[killerId])
+		local data = State.playerData[uid]
+		if data then
+			data.deaths = data.deaths + 1
 		end
 
-		notifyDeath:FireClient(player)
-
-		-- Eject from vehicle on death
-		for model, vData in pairs(State.vehicles) do
-			if vData.driver == player then
-				vData.driver = nil
-				ejectVehicle:FireClient(player, model, "died")
-				for _, p in ipairs(Players:GetPlayers()) do
-					updateVehicle:FireClient(p, model, { driver = nil, health = vData.health })
-				end
+		-- Credit kill to attacker (combat scripts set creator tag)
+		local tag = humanoid:FindFirstChild("creator")
+		if tag and tag.Value and tag.Value ~= player then
+			local attacker     = tag.Value
+			local attackerData = State.playerData[attacker.UserId]
+			if attackerData then
+				attackerData.kills  = attackerData.kills + 1
+				attackerData.coins  = attackerData.coins + (WorldConfig.KillReward or 10)
 			end
 		end
 
-		-- Respawn after delay if round is active
+		-- Respawn to suburb spawn during Active phase
 		if State.phase == "Active" then
 			task.delay(WorldConfig.RespawnDelay or 3, function()
 				if player and player.Parent then
@@ -296,193 +319,186 @@ local function onCharacterAdded(player, char)
 			end)
 		end
 	end)
-
-	-- Sync health on change (damage from environment, etc.)
-	humanoid.HealthChanged:Connect(function(hp)
-		updateHealth:FireClient(player, hp, humanoid.MaxHealth)
-	end)
 end
 
--- ── Remote handlers ───────────────────────────────────────────────────────────
+-- ── Remote listeners ──────────────────────────────────────────────────────────
 
--- Client requests to deal damage to a character (validated server-side)
-dealDamage.OnServerEvent:Connect(function(attacker, victimChar, amount)
-	-- Clamp amount to configured max to prevent exploits
-	local maxDmg = WorldConfig.MaxDamagePerHit or 50
-	amount = math.clamp(tonumber(amount) or 0, 0, maxDmg)
-	applyCombatDamage(attacker, victimChar, amount)
-end)
-
--- Client requests to use a health pack
-requestHeal.OnServerEvent:Connect(function(player, pack)
-	useHealthPack(player, pack)
-end)
-
--- Client requests to enter a vehicle
-requestVehicle.OnServerEvent:Connect(function(player, model)
-	local vData = State.vehicles[model]
-	if not vData then return end
-	if vData.driver ~= nil then return end          -- already occupied
-	if vData.health <= 0 then return end            -- destroyed
-
-	vData.driver = player
-	-- Notify all clients
-	for _, p in ipairs(Players:GetPlayers()) do
-		updateVehicle:FireClient(p, model, { driver = player, health = vData.health })
+-- World-builder: client requests place/remove
+worldBuilderEvent.OnServerEvent:Connect(function(player, action, ...)
+	if action == "Place" then
+		local objectType, cframe = ...
+		placeObject(player, objectType, cframe)
+	elseif action == "Remove" then
+		local index = ...
+		removeObject(player, index)
 	end
 end)
 
--- Client requests to leave a vehicle
-ejectVehicle.OnServerEvent:Connect(function(player, model)
-	local vData = State.vehicles[model]
-	if not vData then return end
-	if vData.driver ~= player then return end       -- not the driver
-
-	vData.driver = nil
-	for _, p in ipairs(Players:GetPlayers()) do
-		updateVehicle:FireClient(p, model, { driver = nil, health = vData.health })
+-- Spawn pads: client requests use
+spawnPadsEvent.OnServerEvent:Connect(function(player, action, padId)
+	if action == "Use" then
+		useSpawnPad(player, padId)
 	end
 end)
 
--- ── Player added / removing ───────────────────────────────────────────────────
+-- Hazard props: client reports trigger (validated server-side)
+hazardPropsEvent.OnServerEvent:Connect(function(player, action, hazardId)
+	if action == "Trigger" then
+		triggerHazard(hazardId, player)
+	end
+end)
+
+-- Shortcuts: client requests unlock
+shortcutsEvent.OnServerEvent:Connect(function(player, action, shortcutId)
+	if action == "Unlock" then
+		unlockShortcut(player, shortcutId)
+	end
+end)
+
+-- ── PlayerAdded / PlayerRemoving ──────────────────────────────────────────────
 Players.PlayerAdded:Connect(function(player)
-	loadPlayerData(player)
-	State.killCounts[player.UserId] = 0
+	local data = loadPlayerData(player)
 
 	player.CharacterAdded:Connect(function(char)
 		onCharacterAdded(player, char)
-		spawnAtDefault(player)
+		-- Spawn at suburb if assigned, else default area
+		task.wait() -- wait one frame for character to fully load
+		if data.suburb and data.suburb ~= "Default" then
+			local root = char:FindFirstChild("HumanoidRootPart")
+			if root then
+				root.CFrame = getSuburbSpawnCFrame(data.suburb)
+			end
+		else
+			spawnAtDefaultArea(player)
+		end
 	end)
+
+	-- Initialise session state
+	State.placedObjects[player.UserId]     = data.placedObjects
+	State.unlockedShortcuts[player.UserId] = data.shortcuts
+
+	-- Load character then send initial data
+	player:LoadCharacter()
+	assignSuburb(player)
+	sendShortcutsToPlayer(player)
+
+	-- Restore placed objects for this player to all others
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player then
+			for idx, obj in ipairs(data.placedObjects) do
+				worldBuilderEvent:FireClient(p, "RemotePlaced", player.UserId, obj.objectType, obj.cf)
+			end
+		end
+	end
 end)
 
 Players.PlayerRemoving:Connect(function(player)
 	savePlayerData(player)
-
-	-- Free any vehicle this player was driving
-	for model, vData in pairs(State.vehicles) do
-		if vData.driver == player then
-			vData.driver = nil
-			for _, p in ipairs(Players:GetPlayers()) do
-				updateVehicle:FireClient(p, model, { driver = nil, health = vData.health })
-			end
-		end
-	end
-
-	State.killCounts[player.UserId] = nil
-	sessionData[player.UserId]      = nil
-	DAMAGE_COOLDOWN[player.UserId]  = nil
+	-- Clean up session state
+	State.playerData[player.UserId]        = nil
+	State.placedObjects[player.UserId]     = nil
+	State.unlockedShortcuts[player.UserId] = nil
+	-- Notify others that player's placed objects are gone
+	fireAll(worldBuilderEvent, "PlayerLeft", player.UserId)
 end)
 
--- Save all players if server shuts down unexpectedly
+-- Save all players on server close (handles forced shutdown)
 game:BindToClose(function()
 	for _, player in ipairs(Players:GetPlayers()) do
 		savePlayerData(player)
 	end
 end)
 
--- ── Round logic ───────────────────────────────────────────────────────────────
-local function resetRoundKills()
-	for _, p in ipairs(Players:GetPlayers()) do
-		State.killCounts[p.UserId] = 0
-		updateKills:FireClient(p, 0)
-	end
-end
-
-local function broadcastTimer(secondsLeft)
-	for _, p in ipairs(Players:GetPlayers()) do
-		updateTimer:FireClient(p, secondsLeft)
+-- ── Round loop ────────────────────────────────────────────────────────────────
+local function startRound()
+	State.phase = "Active"
+	initHazards()
+	-- Reset build tokens for all connected players
+	for _, player in ipairs(Players:GetPlayers()) do
+		local data = State.playerData[player.UserId]
+		if data then
+			data.buildTokens = WorldConfig.BuildTokensPerRound or 10
+		end
+		worldBuilderEvent:FireClient(player, "RoundStart")
 	end
 end
 
 local function endRound()
 	State.phase = "Intermission"
-
-	-- Find the player with the most kills this round
-	local winnerId, winnerKills = nil, -1
-	for userId, kills in pairs(State.killCounts) do
-		if kills > winnerKills then
-			winnerId    = userId
-			winnerKills = kills
-		end
-	end
-
-	local winnerPlayer = winnerId and Players:GetPlayerByUserId(winnerId)
-	local winnerName   = winnerPlayer and winnerPlayer.Name or "Nobody"
-
-	-- Notify all clients — clients show round-end overlay via NotifyDeath("round_end", ...)
-	for _, p in ipairs(Players:GetPlayers()) do
-		notifyDeath:FireClient(p, "round_end", winnerName, winnerKills)
-	end
-
-	-- Accumulate round kills into persistent session data
-	for _, p in ipairs(Players:GetPlayers()) do
-		local uid  = p.UserId
-		local data = sessionData[uid]
-		if data then
-			data.kills = (data.kills or 0) + (State.killCounts[uid] or 0)
-		end
-	end
-
-	log.info = log.info or print  -- fallback if log not defined
+	fireAll(worldBuilderEvent, "RoundEnd")
+	task.wait(WorldConfig.IntermissionDuration or 10)
 end
 
--- ── Main round coroutine ──────────────────────────────────────────────────────
-local function roundLoop()
+local function gameLoop()
 	while true do
-		-- WAITING: hold until enough players connect
 		State.phase = "Waiting"
-		broadcastTimer(0)
-		repeat
-			task.wait(2)
-		until #Players:GetPlayers() >= MIN_PLAYERS
+		-- Wait until minimum players are present
+		repeat task.wait(2) until #Players:GetPlayers() >= MIN_PLAYERS
 
-		-- INTERMISSION countdown
-		State.phase = "Intermission"
-		local intermission = WorldConfig.IntermissionDuration or 10
-		for t = intermission, 1, -1 do
-			broadcastTimer(t)
+		startRound()
+
+		-- Countdown timer broadcast
+		local roundEnd = os.clock() + (WorldConfig.RoundDuration or 180)
+		while os.clock() < roundEnd do
+			local timeLeft = math.ceil(roundEnd - os.clock())
+			for _, p in ipairs(Players:GetPlayers()) do
+				-- Reuse shortcuts event channel for timer; extend remotes if desired
+				shortcutsEvent:FireClient(p, "Timer", timeLeft)
+			end
 			task.wait(1)
 		end
 
-		-- ACTIVE ROUND
-		State.phase = "Active"
-		resetRoundKills()
-		initVehicles()
-		initHealthPacks()
-
-		local duration = WorldConfig.RoundDuration or 180
-		State.roundEndsAt = os.time() + duration
-
-		for t = duration, 0, -1 do
-			broadcastTimer(t)
-			-- Early exit if only one (or zero) players remain
-			if #Players:GetPlayers() < 2 then break end
-			task.wait(1)
-		end
-
-		-- END OF ROUND
 		endRound()
-		-- Brief post-round pause before looping back to Waiting
-		task.wait(WorldConfig.IntermissionDuration or 10)
 	end
 end
 
--- ── Public module API ─────────────────────────────────────────────────────────
+task.spawn(gameLoop)
+
+-- ── Public API ────────────────────────────────────────────────────────────────
 local GameManager = {}
 
-function GameManager.getKills(player)
-	return State.killCounts[player.UserId] or 0
+function GameManager.GetPlayerData(player)
+	return State.playerData[player.UserId]
 end
 
-function GameManager.getPhase()
+function GameManager.AddCoins(player, amount)
+	local data = State.playerData[player.UserId]
+	if data then
+		data.coins = data.coins + amount
+	end
+end
+
+function GameManager.GetPhase()
 	return State.phase
 end
 
-function GameManager.getSessionData(player)
-	return sessionData[player.UserId]
+function GameManager.RegisterSpawnPad(padId, owner)
+	registerSpawnPad(padId, owner)
 end
 
--- Start round loop in a background thread
-task.spawn(roundLoop)
+function GameManager.TriggerHazard(hazardId, player)
+	triggerHazard(hazardId, player)
+end
+
+function GameManager.UnlockShortcut(player, shortcutId)
+	return unlockShortcut(player, shortcutId)
+end
+
+function GameManager.PlaceObject(player, objectType, cframe)
+	return placeObject(player, objectType, cframe)
+end
+
+function GameManager.RemoveObject(player, index)
+	removeObject(player, index)
+end
+
+function GameManager.AssignSuburb(player, suburbName)
+	local uid  = player.UserId
+	local data = State.playerData[uid]
+	if data then
+		data.suburb = suburbName
+		starterSuburbsEvent:FireClient(player, "Assigned", suburbName)
+	end
+end
 
 return GameManager

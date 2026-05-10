@@ -1,394 +1,348 @@
--- HudController.lua
--- Route Rage — HUD LocalScript
--- Place in: StarterPlayerScripts
-
-local Players          = game:GetService("Players")
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService     = game:GetService("TweenService")
+local TweenService = game:GetService("TweenService")
 
-local player    = Players.LocalPlayer
+local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- ── Build ScreenGui ──────────────────────────────────────────────────────────
+-- ── Build ScreenGui ───────────────────────────────────────────────────────────
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name            = "HUD"
-screenGui.ResetOnSpawn    = false
-screenGui.ZIndexBehavior  = Enum.ZIndexBehavior.Sibling
-screenGui.Parent          = playerGui
+screenGui.Name = "HUD"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = playerGui
 
 -- ── Utility: make a Frame ────────────────────────────────────────────────────
 local function makeFrame(name, size, position, color, parent, transparency)
 	local f = Instance.new("Frame")
-	f.Name                  = name
-	f.Size                  = size
-	f.Position              = position
-	f.BackgroundColor3      = color or Color3.fromRGB(30, 30, 30)
-	f.BackgroundTransparency = transparency or 0.4
-	f.BorderSizePixel       = 0
-	f.Parent                = parent or screenGui
+	f.Name = name
+	f.Size = size
+	f.Position = position
+	f.BackgroundColor3 = color or Color3.fromRGB(30, 30, 30)
+	f.BackgroundTransparency = transparency or 0.35
+	f.BorderSizePixel = 0
+	f.Parent = parent
 	return f
 end
 
 -- ── Utility: make a TextLabel ────────────────────────────────────────────────
 local function makeLabel(name, text, size, position, parent, fontSize)
 	local l = Instance.new("TextLabel")
-	l.Name                  = name
-	l.Text                  = text
-	l.Size                  = size
-	l.Position              = position
+	l.Name = name
+	l.Text = text
+	l.Size = size
+	l.Position = position
 	l.BackgroundTransparency = 1
-	l.TextColor3            = Color3.fromRGB(255, 255, 255)
-	l.Font                  = Enum.Font.GothamBold
-	l.TextSize              = fontSize or 16
-	l.TextXAlignment        = Enum.TextXAlignment.Left
-	l.Parent                = parent or screenGui
+	l.TextColor3 = Color3.fromRGB(255, 255, 255)
+	l.Font = Enum.Font.GothamBold
+	l.TextSize = fontSize or 16
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.Parent = parent
 	return l
 end
 
--- ── Corner radius helper ─────────────────────────────────────────────────────
-local function addCorner(instance, radius)
-	local c = Instance.new("UICorner")
-	c.CornerRadius = UDim.new(0, radius or 6)
-	c.Parent = instance
+-- ── Utility: make a TextButton ───────────────────────────────────────────────
+local function makeButton(name, text, size, position, color, parent)
+	local b = Instance.new("TextButton")
+	b.Name = name
+	b.Text = text
+	b.Size = size
+	b.Position = position
+	b.BackgroundColor3 = color or Color3.fromRGB(60, 120, 200)
+	b.BackgroundTransparency = 0.2
+	b.BorderSizePixel = 0
+	b.TextColor3 = Color3.fromRGB(255, 255, 255)
+	b.Font = Enum.Font.GothamBold
+	b.TextSize = 14
+	b.Parent = parent
+	-- Rounded corners
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = b
+	return b
 end
 
--- ════════════════════════════════════════════════════════════════════════════
--- HEALTH BAR
--- ════════════════════════════════════════════════════════════════════════════
-local healthPanel = makeFrame(
-	"HealthPanel",
-	UDim2.new(0, 220, 0, 36),
-	UDim2.new(0, 16, 1, -56),
-	Color3.fromRGB(20, 20, 20),
-	screenGui, 0.3
-)
-addCorner(healthPanel, 8)
+-- ── Corner helper ────────────────────────────────────────────────────────────
+local function addCorner(parent, radius)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, radius or 6)
+	c.Parent = parent
+end
 
--- Heart icon label
-local heartIcon = makeLabel("HeartIcon", "❤", UDim2.new(0, 30, 1, 0),
-	UDim2.new(0, 6, 0, 0), healthPanel, 18)
-heartIcon.TextXAlignment = Enum.TextXAlignment.Center
-heartIcon.TextColor3     = Color3.fromRGB(230, 60, 60)
+-- ══════════════════════════════════════════════════════════════════════════════
+-- HEALTH BAR (top-left)
+-- ══════════════════════════════════════════════════════════════════════════════
+local healthBarBg = makeFrame("HealthBarBg",
+	UDim2.new(0, 220, 0, 22),
+	UDim2.new(0, 16, 0, 16),
+	Color3.fromRGB(20, 20, 20), screenGui, 0.3)
+addCorner(healthBarBg, 8)
 
--- Health bar background track
-local healthBarBg = makeFrame(
-	"HealthBarBg",
-	UDim2.new(1, -46, 0, 14),
-	UDim2.new(0, 40, 0.5, -7),
-	Color3.fromRGB(50, 50, 50),
-	healthPanel, 0
-)
-addCorner(healthBarBg, 5)
-
--- Health fill
-local healthFill = makeFrame(
-	"HealthFill",
+local healthFill = makeFrame("HealthFill",
 	UDim2.new(1, 0, 1, 0),
 	UDim2.new(0, 0, 0, 0),
-	Color3.fromRGB(80, 200, 80),
-	healthBarBg, 0
-)
-addCorner(healthFill, 5)
+	Color3.fromRGB(80, 200, 80), healthBarBg, 0)
+addCorner(healthFill, 8)
 
--- Health text e.g. "100 / 100"
-local healthLabel = makeLabel(
-	"HealthLabel", "100 / 100",
-	UDim2.new(1, -46, 0, 14),
-	UDim2.new(0, 40, 0.5, 8),
-	healthPanel, 12
-)
+local healthLabel = makeLabel("HealthLabel", "HP  100 / 100",
+	UDim2.new(1, 0, 1, 0), UDim2.new(0, 6, 0, 0), healthBarBg, 13)
 healthLabel.TextXAlignment = Enum.TextXAlignment.Center
-healthLabel.Size           = UDim2.new(1, -46, 0, 12)
+healthLabel.ZIndex = 3
 
--- ════════════════════════════════════════════════════════════════════════════
--- COMBAT PANEL  (kill counter + combo)
--- ════════════════════════════════════════════════════════════════════════════
-local combatPanel = makeFrame(
-	"CombatPanel",
-	UDim2.new(0, 160, 0, 70),
-	UDim2.new(1, -176, 0, 16),
-	Color3.fromRGB(20, 20, 20),
-	screenGui, 0.3
-)
-addCorner(combatPanel, 8)
+-- ══════════════════════════════════════════════════════════════════════════════
+-- STAT PANEL (below health bar) — world-builder & route info
+-- ══════════════════════════════════════════════════════════════════════════════
+local statPanel = makeFrame("StatPanel",
+	UDim2.new(0, 220, 0, 130),
+	UDim2.new(0, 16, 0, 46),
+	Color3.fromRGB(15, 15, 15), screenGui, 0.3)
+addCorner(statPanel, 8)
 
-local killLabel = makeLabel(
-	"KillLabel", "🔫  Kills: 0",
-	UDim2.new(1, -8, 0, 28),
-	UDim2.new(0, 8, 0, 4),
-	combatPanel, 15
-)
-killLabel.TextXAlignment = Enum.TextXAlignment.Left
+-- Route Rage coins / build points
+local coinsLabel     = makeLabel("CoinsLabel",     "🪙 Coins: 0",
+	UDim2.new(1, -10, 0, 22), UDim2.new(0, 8, 0, 4),  statPanel, 14)
+-- Suburb / zone name
+local zoneLabel      = makeLabel("ZoneLabel",      "📍 Zone: Starter Suburbs",
+	UDim2.new(1, -10, 0, 22), UDim2.new(0, 8, 0, 28), statPanel, 13)
+-- Active hazard count
+local hazardLabel    = makeLabel("HazardLabel",    "⚠️  Hazards: 0",
+	UDim2.new(1, -10, 0, 22), UDim2.new(0, 8, 0, 52), statPanel, 13)
+-- Shortcut bonus
+local shortcutLabel  = makeLabel("ShortcutLabel",  "⚡ Shortcuts: 0",
+	UDim2.new(1, -10, 0, 22), UDim2.new(0, 8, 0, 76), statPanel, 13)
+-- Spawn pad cooldown
+local spawnPadLabel  = makeLabel("SpawnPadLabel",  "🔵 Spawn Pad: Ready",
+	UDim2.new(1, -10, 0, 22), UDim2.new(0, 8, 0, 100), statPanel, 13)
 
-local comboLabel = makeLabel(
-	"ComboLabel", "⚡  Combo: x0",
-	UDim2.new(1, -8, 0, 28),
-	UDim2.new(0, 8, 0, 36),
-	combatPanel, 14
-)
-comboLabel.TextXAlignment = Enum.TextXAlignment.Left
-comboLabel.TextColor3     = Color3.fromRGB(255, 220, 60)
+-- ══════════════════════════════════════════════════════════════════════════════
+-- NOTIFICATION BANNER (centre-top) — hazard alerts, shortcut unlocks
+-- ══════════════════════════════════════════════════════════════════════════════
+local notifBg = makeFrame("NotifBg",
+	UDim2.new(0, 320, 0, 36),
+	UDim2.new(0.5, -160, 0, 12),
+	Color3.fromRGB(220, 140, 0), screenGui, 0)
+addCorner(notifBg, 10)
+notifBg.Visible = false
 
--- ════════════════════════════════════════════════════════════════════════════
--- VEHICLE PANEL  (speed + gear + nitro)
--- ════════════════════════════════════════════════════════════════════════════
-local vehiclePanel = makeFrame(
-	"VehiclePanel",
-	UDim2.new(0, 200, 0, 90),
-	UDim2.new(0.5, -100, 1, -106),
-	Color3.fromRGB(20, 20, 20),
-	screenGui, 0.3
-)
-addCorner(vehiclePanel, 8)
+local notifLabel = makeLabel("NotifLabel", "",
+	UDim2.new(1, 0, 1, 0), UDim2.new(0, 0, 0, 0), notifBg, 15)
+notifLabel.TextXAlignment = Enum.TextXAlignment.Center
 
-local speedLabel = makeLabel(
-	"SpeedLabel", "🚗  0 km/h",
-	UDim2.new(1, -8, 0, 26),
-	UDim2.new(0, 8, 0, 4),
-	vehiclePanel, 18
-)
-speedLabel.TextXAlignment = Enum.TextXAlignment.Center
-speedLabel.Size           = UDim2.new(1, -8, 0, 26)
+-- ══════════════════════════════════════════════════════════════════════════════
+-- ACTION BUTTONS (bottom-centre) — world-builder tools
+-- ══════════════════════════════════════════════════════════════════════════════
+local buttonRow = makeFrame("ButtonRow",
+	UDim2.new(0, 430, 0, 52),
+	UDim2.new(0.5, -215, 1, -68),
+	Color3.fromRGB(10, 10, 10), screenGui, 0.4)
+addCorner(buttonRow, 10)
 
-local gearLabel = makeLabel(
-	"GearLabel", "GEAR  N",
-	UDim2.new(1, -8, 0, 22),
-	UDim2.new(0, 8, 0, 32),
-	vehiclePanel, 14
-)
-gearLabel.TextXAlignment = Enum.TextXAlignment.Center
-gearLabel.Size           = UDim2.new(1, -8, 0, 22)
+local btnPlaceProp   = makeButton("BtnPlaceProp",   "🏗️ Place Prop",
+	UDim2.new(0, 130, 0, 36), UDim2.new(0, 8,   0, 8),
+	Color3.fromRGB(50, 130, 220), buttonRow)
 
--- Nitro bar background
-local nitroBarBg = makeFrame(
-	"NitroBarBg",
-	UDim2.new(1, -16, 0, 12),
-	UDim2.new(0, 8, 0, 60),
-	Color3.fromRGB(30, 30, 60),
-	vehiclePanel, 0
-)
-addCorner(nitroBarBg, 4)
+local btnSetSpawn    = makeButton("BtnSetSpawn",    "🔵 Set Spawn",
+	UDim2.new(0, 120, 0, 36), UDim2.new(0, 148, 0, 8),
+	Color3.fromRGB(40, 160, 100), buttonRow)
 
-local nitroFill = makeFrame(
-	"NitroFill",
-	UDim2.new(1, 0, 1, 0),
-	UDim2.new(0, 0, 0, 0),
-	Color3.fromRGB(60, 120, 255),
-	nitroBarBg, 0
-)
-addCorner(nitroFill, 4)
+local btnHazard      = makeButton("BtnHazard",      "⚠️ Hazard",
+	UDim2.new(0, 110, 0, 36), UDim2.new(0, 278, 0, 8),
+	Color3.fromRGB(200, 70, 50), buttonRow)
 
-local nitroLabel = makeLabel(
-	"NitroLabel", "NITRO",
-	UDim2.new(1, -16, 0, 12),
-	UDim2.new(0, 8, 0, 74),
-	vehiclePanel, 10
-)
-nitroLabel.TextXAlignment = Enum.TextXAlignment.Center
-nitroLabel.Size           = UDim2.new(1, -16, 0, 12)
+-- ══════════════════════════════════════════════════════════════════════════════
+-- MINIMAP PLACEHOLDER (top-right) — shows suburb layout hint
+-- ══════════════════════════════════════════════════════════════════════════════
+local minimapBg = makeFrame("MinimapBg",
+	UDim2.new(0, 130, 0, 130),
+	UDim2.new(1, -146, 0, 16),
+	Color3.fromRGB(20, 20, 20), screenGui, 0.25)
+addCorner(minimapBg, 10)
 
--- ════════════════════════════════════════════════════════════════════════════
--- ROUND TIMER  (top-centre)
--- ════════════════════════════════════════════════════════════════════════════
-local timerPanel = makeFrame(
-	"TimerPanel",
-	UDim2.new(0, 110, 0, 38),
-	UDim2.new(0.5, -55, 0, 10),
-	Color3.fromRGB(20, 20, 20),
-	screenGui, 0.3
-)
-addCorner(timerPanel, 8)
+local minimapLabel = makeLabel("MinimapLabel", "MAP",
+	UDim2.new(1, 0, 1, 0), UDim2.new(0, 0, 0, 0), minimapBg, 13)
+minimapLabel.TextXAlignment = Enum.TextXAlignment.Center
+minimapLabel.TextColor3 = Color3.fromRGB(160, 160, 160)
 
-local roundTimer = makeLabel(
-	"RoundTimer", "0:00",
-	UDim2.new(1, 0, 1, 0),
-	UDim2.new(0, 0, 0, 0),
-	timerPanel, 22
-)
-roundTimer.TextXAlignment = Enum.TextXAlignment.Center
-roundTimer.Font           = Enum.Font.GothamBold
-
--- ════════════════════════════════════════════════════════════════════════════
+-- ══════════════════════════════════════════════════════════════════════════════
 -- REMOTES
--- ════════════════════════════════════════════════════════════════════════════
-local remotes        = ReplicatedStorage:WaitForChild("Remotes")
-local evUpdateKills  = remotes:WaitForChild("UpdateKills")
-local evUpdateTimer  = remotes:WaitForChild("UpdateTimer")
-local evUpdateVehicle = remotes:WaitForChild("UpdateVehicle")  -- speed, gear, nitro 0-1
-local evUpdateCombo  = remotes:WaitForChild("UpdateCombo")
+-- ══════════════════════════════════════════════════════════════════════════════
+local remotes         = ReplicatedStorage:WaitForChild("Remotes")
+local updateHealth    = remotes:WaitForChild("UpdateHealth")
+local updateCoins     = remotes:WaitForChild("UpdateCoins")
+local updateZone      = remotes:WaitForChild("UpdateZone")
+local updateHazards   = remotes:WaitForChild("UpdateHazards")
+local updateShortcuts = remotes:WaitForChild("UpdateShortcuts")
+local updateSpawnPad  = remotes:WaitForChild("UpdateSpawnPad")
+local sendNotif       = remotes:WaitForChild("SendNotification")
+local placePropRemote = remotes:WaitForChild("PlaceProp")
+local setSpawnRemote  = remotes:WaitForChild("SetSpawnPad")
+local placeHazardRemote = remotes:WaitForChild("PlaceHazard")
 
--- ── TweenInfo presets ────────────────────────────────────────────────────────
-local tweenFast   = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local tweenMedium = TweenInfo.new(0.4,  Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+-- ══════════════════════════════════════════════════════════════════════════════
+-- HEALTH BAR LOGIC
+-- ══════════════════════════════════════════════════════════════════════════════
+local tweenInfo = TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
--- ── Health bar update ────────────────────────────────────────────────────────
-local function updateHealthBar(health, maxHealth)
+local function applyHealthVisuals(health, maxHealth)
 	local pct = math.clamp(health / maxHealth, 0, 1)
+	local targetSize = UDim2.new(pct, 0, 1, 0)
 
-	-- Smooth fill tween
-	TweenService:Create(healthFill, tweenFast,
-		{ Size = UDim2.new(pct, 0, 1, 0) }):Play()
-
-	-- Colour shift green → yellow → red
+	-- Colour based on percentage
 	local fillColor
 	if pct > 0.6 then
 		fillColor = Color3.fromRGB(80, 200, 80)
 	elseif pct > 0.3 then
-		fillColor = Color3.fromRGB(230, 200, 0)
+		fillColor = Color3.fromRGB(230, 190, 0)
 	else
 		fillColor = Color3.fromRGB(220, 50, 50)
 	end
-	TweenService:Create(healthFill, tweenFast,
-		{ BackgroundColor3 = fillColor }):Play()
 
-	healthLabel.Text = math.floor(health) .. " / " .. math.floor(maxHealth)
+	TweenService:Create(healthFill, tweenInfo, {
+		Size = targetSize,
+		BackgroundColor3 = fillColor,
+	}):Play()
+
+	healthLabel.Text = string.format("HP  %d / %d", math.ceil(health), maxHealth)
 end
 
--- ── Connect humanoid health changes ─────────────────────────────────────────
-local function connectCharacter(character)
+local function connectHumanoid(character)
 	local humanoid = character:WaitForChild("Humanoid")
-	updateHealthBar(humanoid.Health, humanoid.MaxHealth)
-
-	humanoid.HealthChanged:Connect(function(health)
-		updateHealthBar(health, humanoid.MaxHealth)
+	applyHealthVisuals(humanoid.Health, humanoid.MaxHealth)
+	humanoid.HealthChanged:Connect(function(hp)
+		applyHealthVisuals(hp, humanoid.MaxHealth)
 	end)
 end
 
--- Initial connection
+-- ServerSide health sync via remote (authoritative)
+updateHealth.OnClientEvent:Connect(function(hp, maxHp)
+	applyHealthVisuals(hp, maxHp)
+end)
+
+-- Also hook directly into the character humanoid for responsiveness
 local character = player.Character or player.CharacterAdded:Wait()
-connectCharacter(character)
+connectHumanoid(character)
 
--- Reconnect after respawn
 player.CharacterAdded:Connect(function(newChar)
-	connectCharacter(newChar)
+	connectHumanoid(newChar)
 end)
 
--- ── Kill counter ─────────────────────────────────────────────────────────────
-evUpdateKills.OnClientEvent:Connect(function(kills)
-	killLabel.Text = "🔫  Kills: " .. tostring(kills)
-
-	-- Brief flash white on new kill
-	killLabel.TextColor3 = Color3.fromRGB(255, 255, 100)
-	TweenService:Create(killLabel, tweenMedium,
-		{ TextColor3 = Color3.fromRGB(255, 255, 255) }):Play()
+-- ══════════════════════════════════════════════════════════════════════════════
+-- STAT LABEL UPDATES
+-- ══════════════════════════════════════════════════════════════════════════════
+updateCoins.OnClientEvent:Connect(function(amount)
+	coinsLabel.Text = "🪙 Coins: " .. tostring(amount)
+	-- Briefly highlight
+	TweenService:Create(coinsLabel, TweenInfo.new(0.15), {
+		TextColor3 = Color3.fromRGB(255, 230, 50),
+	}):Play()
+	task.delay(0.5, function()
+		TweenService:Create(coinsLabel, TweenInfo.new(0.3), {
+			TextColor3 = Color3.fromRGB(255, 255, 255),
+		}):Play()
+	end)
 end)
 
--- ── Combo counter ────────────────────────────────────────────────────────────
-evUpdateCombo.OnClientEvent:Connect(function(combo)
-	comboLabel.Text = "⚡  Combo: x" .. tostring(combo)
+updateZone.OnClientEvent:Connect(function(zoneName)
+	zoneLabel.Text = "📍 Zone: " .. tostring(zoneName)
+end)
 
-	-- Scale pulse effect via TextSize
-	comboLabel.TextSize = 18
-	TweenService:Create(comboLabel, tweenFast,
-		{ TextSize = 14 }):Play()
+updateHazards.OnClientEvent:Connect(function(count)
+	hazardLabel.Text = "⚠️  Hazards: " .. tostring(count)
+	-- Flash orange when a new hazard is added
+	local flashColor = count > 0 and Color3.fromRGB(255, 120, 30) or Color3.fromRGB(255, 255, 255)
+	TweenService:Create(hazardLabel, TweenInfo.new(0.2), { TextColor3 = flashColor }):Play()
+	task.delay(0.6, function()
+		TweenService:Create(hazardLabel, TweenInfo.new(0.3), {
+			TextColor3 = Color3.fromRGB(255, 255, 255),
+		}):Play()
+	end)
+end)
 
-	-- Highlight on high combo
-	if combo >= 5 then
-		comboLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
-	elseif combo >= 3 then
-		comboLabel.TextColor3 = Color3.fromRGB(255, 180, 40)
-	else
-		comboLabel.TextColor3 = Color3.fromRGB(255, 220, 60)
+updateShortcuts.OnClientEvent:Connect(function(count)
+	shortcutLabel.Text = "⚡ Shortcuts: " .. tostring(count)
+end)
+
+-- spawnPad: receives ("Ready") or ("Cooldown", secondsLeft)
+updateSpawnPad.OnClientEvent:Connect(function(state, seconds)
+	if state == "Ready" then
+		spawnPadLabel.Text = "🔵 Spawn Pad: Ready"
+		spawnPadLabel.TextColor3 = Color3.fromRGB(80, 200, 255)
+	elseif state == "Cooldown" then
+		spawnPadLabel.Text = string.format("🔵 Spawn Pad: %ds", math.ceil(seconds or 0))
+		spawnPadLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
 	end
 end)
 
--- ── Round timer ──────────────────────────────────────────────────────────────
-evUpdateTimer.OnClientEvent:Connect(function(secondsLeft)
-	local m = math.floor(secondsLeft / 60)
-	local s = secondsLeft % 60
-	roundTimer.Text = string.format("%d:%02d", m, s)
+-- ══════════════════════════════════════════════════════════════════════════════
+-- NOTIFICATION BANNER
+-- ══════════════════════════════════════════════════════════════════════════════
+local notifTween = nil
 
-	-- Flash red in final 10 seconds
-	if secondsLeft <= 10 then
-		roundTimer.TextColor3 = Color3.fromRGB(220, 50, 50)
-		-- Quick scale throb
-		roundTimer.TextSize = 26
-		TweenService:Create(roundTimer, tweenFast,
-			{ TextSize = 22 }):Play()
-	else
-		roundTimer.TextColor3 = Color3.fromRGB(255, 255, 255)
-		roundTimer.TextSize   = 22
-	end
-end)
+local function showNotification(message, color)
+	-- Cancel previous if still visible
+	if notifTween then notifTween:Cancel() end
 
--- ── Vehicle stats ─────────────────────────────────────────────────────────────
--- Server fires: UpdateVehicle(speed [number], gear [string], nitroPct [0-1])
-evUpdateVehicle.OnClientEvent:Connect(function(speed, gear, nitroPct)
-	-- Speed
-	speedLabel.Text = string.format("🚗  %d km/h", math.floor(speed or 0))
+	notifLabel.Text = message
+	notifBg.BackgroundColor3 = color or Color3.fromRGB(220, 140, 0)
+	notifBg.Visible = true
+	notifBg.BackgroundTransparency = 0
 
-	-- Gear label
-	local gearStr = tostring(gear or "N")
-	gearLabel.Text = "GEAR  " .. gearStr
-
-	-- Colour gear label by type
-	if gearStr == "R" then
-		gearLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
-	elseif gearStr == "N" then
-		gearLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
-	else
-		gearLabel.TextColor3 = Color3.fromRGB(100, 220, 255)
-	end
-
-	-- Nitro bar fill tween
-	local np = math.clamp(nitroPct or 0, 0, 1)
-	TweenService:Create(nitroFill, tweenFast,
-		{ Size = UDim2.new(np, 0, 1, 0) }):Play()
-
-	-- Tint bar cyan when nearly full
-	local nitroColor = np >= 0.9
-		and Color3.fromRGB(140, 200, 255)
-		or  Color3.fromRGB(60, 120, 255)
-	TweenService:Create(nitroFill, tweenFast,
-		{ BackgroundColor3 = nitroColor }):Play()
-end)
-
--- ── Health sync (server authoritative) ──────────────────────────────────────
-local evUpdateHealth = remotes:WaitForChild("UpdateHealth")
-evUpdateHealth.OnClientEvent:Connect(function(health, maxHealth)
-	updateHealthBar(health, maxHealth)
-end)
-
--- ── Death & round-end overlay ────────────────────────────────────────────────
-local evNotifyDeath = remotes:WaitForChild("NotifyDeath")
-
-evNotifyDeath.OnClientEvent:Connect(function(eventType, winnerName, winnerKills)
-	if eventType == "round_end" then
-		-- Round-end banner
-		local banner = Instance.new("TextLabel")
-		banner.Name                   = "RoundEndBanner"
-		banner.Size                   = UDim2.new(0, 440, 0, 70)
-		banner.Position               = UDim2.new(0.5, -220, 0.35, 0)
-		banner.BackgroundColor3       = Color3.fromRGB(20, 20, 20)
-		banner.BackgroundTransparency = 0.15
-		banner.TextColor3             = Color3.fromRGB(255, 220, 60)
-		banner.Font                   = Enum.Font.GothamBold
-		banner.TextSize               = 22
-		banner.Text                   = string.format(
-			"🏆  %s wins  ·  %d kills!", winnerName or "—", winnerKills or 0)
-		banner.BorderSizePixel        = 0
-		banner.Parent                 = screenGui
-		addCorner(banner, 10)
-
-		-- Fade out after 4 s
-		task.delay(4, function()
-			TweenService:Create(banner, TweenInfo.new(0.5, Enum.EasingStyle.Quad),
-				{ BackgroundTransparency = 1, TextTransparency = 1 }):Play()
-			task.delay(0.6, function() banner:Destroy() end)
+	-- Fade out after 2.5 seconds
+	task.delay(2.5, function()
+		notifTween = TweenService:Create(notifBg, TweenInfo.new(0.6), {
+			BackgroundTransparency = 1,
+		})
+		notifTween:Play()
+		notifTween.Completed:Connect(function()
+			notifBg.Visible = false
 		end)
-	else
-		-- Death flash: full-screen red vignette
-		local flash = Instance.new("Frame")
-		flash.Name                   = "DeathFlash"
-		flash.Size                   = UDim2.new(1, 0, 1, 0)
-		flash.BackgroundColor3       = Color3.fromRGB(200, 30, 30)
-		flash.BackgroundTransparency = 0.45
-		flash.BorderSizePixel        = 0
-		flash.Parent                 = screenGui
+	end)
+end
 
-		TweenService:Create(flash,
-			TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-			{ BackgroundTransparency = 1 }):Play()
-		task.delay(1, function() flash:Destroy() end)
-	end
+sendNotif.OnClientEvent:Connect(function(message, colorRGB)
+	local c = colorRGB and Color3.fromRGB(colorRGB.r * 255, colorRGB.g * 255, colorRGB.b * 255) or nil
+	showNotification(message, c)
 end)
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- ACTION BUTTON INTERACTIONS (world-builder tools)
+-- ══════════════════════════════════════════════════════════════════════════════
+local function buttonClickEffect(button)
+	local orig = button.BackgroundTransparency
+	TweenService:Create(button, TweenInfo.new(0.1), { BackgroundTransparency = 0 }):Play()
+	task.delay(0.15, function()
+		TweenService:Create(button, TweenInfo.new(0.2), { BackgroundTransparency = 0.2 }):Play()
+	end)
+end
+
+-- Place a world prop (e.g. barriers, ramps) — server decides placement
+btnPlaceProp.MouseButton1Click:Connect(function()
+	buttonClickEffect(btnPlaceProp)
+	placePropRemote:FireServer()          -- server handles validation & placement
+end)
+
+-- Set / activate a spawn pad at player's current position
+btnSetSpawn.MouseButton1Click:Connect(function()
+	buttonClickEffect(btnSetSpawn)
+	setSpawnRemote:FireServer()
+end)
+
+-- Drop a hazard prop near the player's current position
+btnHazard.MouseButton1Click:Connect(function()
+	buttonClickEffect(btnHazard)
+	placeHazardRemote:FireServer()
+end)
+
+-- Mobile / touch: hover effect via mouse enter/leave (ignored on mobile, harmless)
+for _, btn in ipairs({btnPlaceProp, btnSetSpawn, btnHazard}) do
+	btn.MouseEnter:Connect(function()
+		TweenService:Create(btn, TweenInfo.new(0.12), {
+			BackgroundTransparency = 0.05,
+		}):Play()
+	end)
+	btn.MouseLeave:Connect(function()
+		TweenService:Create(btn, TweenInfo.new(0.12), {
+			BackgroundTransparency = 0.2,
+		}):Play()
+	end)
+end
