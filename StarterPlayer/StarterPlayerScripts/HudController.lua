@@ -329,3 +329,66 @@ evUpdateVehicle.OnClientEvent:Connect(function(speed, gear, nitroPct)
 	else
 		gearLabel.TextColor3 = Color3.fromRGB(100, 220, 255)
 	end
+
+	-- Nitro bar fill tween
+	local np = math.clamp(nitroPct or 0, 0, 1)
+	TweenService:Create(nitroFill, tweenFast,
+		{ Size = UDim2.new(np, 0, 1, 0) }):Play()
+
+	-- Tint bar cyan when nearly full
+	local nitroColor = np >= 0.9
+		and Color3.fromRGB(140, 200, 255)
+		or  Color3.fromRGB(60, 120, 255)
+	TweenService:Create(nitroFill, tweenFast,
+		{ BackgroundColor3 = nitroColor }):Play()
+end)
+
+-- ── Health sync (server authoritative) ──────────────────────────────────────
+local evUpdateHealth = remotes:WaitForChild("UpdateHealth")
+evUpdateHealth.OnClientEvent:Connect(function(health, maxHealth)
+	updateHealthBar(health, maxHealth)
+end)
+
+-- ── Death & round-end overlay ────────────────────────────────────────────────
+local evNotifyDeath = remotes:WaitForChild("NotifyDeath")
+
+evNotifyDeath.OnClientEvent:Connect(function(eventType, winnerName, winnerKills)
+	if eventType == "round_end" then
+		-- Round-end banner
+		local banner = Instance.new("TextLabel")
+		banner.Name                   = "RoundEndBanner"
+		banner.Size                   = UDim2.new(0, 440, 0, 70)
+		banner.Position               = UDim2.new(0.5, -220, 0.35, 0)
+		banner.BackgroundColor3       = Color3.fromRGB(20, 20, 20)
+		banner.BackgroundTransparency = 0.15
+		banner.TextColor3             = Color3.fromRGB(255, 220, 60)
+		banner.Font                   = Enum.Font.GothamBold
+		banner.TextSize               = 22
+		banner.Text                   = string.format(
+			"🏆  %s wins  ·  %d kills!", winnerName or "—", winnerKills or 0)
+		banner.BorderSizePixel        = 0
+		banner.Parent                 = screenGui
+		addCorner(banner, 10)
+
+		-- Fade out after 4 s
+		task.delay(4, function()
+			TweenService:Create(banner, TweenInfo.new(0.5, Enum.EasingStyle.Quad),
+				{ BackgroundTransparency = 1, TextTransparency = 1 }):Play()
+			task.delay(0.6, function() banner:Destroy() end)
+		end)
+	else
+		-- Death flash: full-screen red vignette
+		local flash = Instance.new("Frame")
+		flash.Name                   = "DeathFlash"
+		flash.Size                   = UDim2.new(1, 0, 1, 0)
+		flash.BackgroundColor3       = Color3.fromRGB(200, 30, 30)
+		flash.BackgroundTransparency = 0.45
+		flash.BorderSizePixel        = 0
+		flash.Parent                 = screenGui
+
+		TweenService:Create(flash,
+			TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{ BackgroundTransparency = 1 }):Play()
+		task.delay(1, function() flash:Destroy() end)
+	end
+end)

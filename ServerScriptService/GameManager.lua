@@ -383,4 +383,106 @@ end)
 -- ── Round logic ───────────────────────────────────────────────────────────────
 local function resetRoundKills()
 	for _, p in ipairs(Players:GetPlayers()) do
-		State.killCounts[p.UserId]
+		State.killCounts[p.UserId] = 0
+		updateKills:FireClient(p, 0)
+	end
+end
+
+local function broadcastTimer(secondsLeft)
+	for _, p in ipairs(Players:GetPlayers()) do
+		updateTimer:FireClient(p, secondsLeft)
+	end
+end
+
+local function endRound()
+	State.phase = "Intermission"
+
+	-- Find the player with the most kills this round
+	local winnerId, winnerKills = nil, -1
+	for userId, kills in pairs(State.killCounts) do
+		if kills > winnerKills then
+			winnerId    = userId
+			winnerKills = kills
+		end
+	end
+
+	local winnerPlayer = winnerId and Players:GetPlayerByUserId(winnerId)
+	local winnerName   = winnerPlayer and winnerPlayer.Name or "Nobody"
+
+	-- Notify all clients — clients show round-end overlay via NotifyDeath("round_end", ...)
+	for _, p in ipairs(Players:GetPlayers()) do
+		notifyDeath:FireClient(p, "round_end", winnerName, winnerKills)
+	end
+
+	-- Accumulate round kills into persistent session data
+	for _, p in ipairs(Players:GetPlayers()) do
+		local uid  = p.UserId
+		local data = sessionData[uid]
+		if data then
+			data.kills = (data.kills or 0) + (State.killCounts[uid] or 0)
+		end
+	end
+
+	log.info = log.info or print  -- fallback if log not defined
+end
+
+-- ── Main round coroutine ──────────────────────────────────────────────────────
+local function roundLoop()
+	while true do
+		-- WAITING: hold until enough players connect
+		State.phase = "Waiting"
+		broadcastTimer(0)
+		repeat
+			task.wait(2)
+		until #Players:GetPlayers() >= MIN_PLAYERS
+
+		-- INTERMISSION countdown
+		State.phase = "Intermission"
+		local intermission = WorldConfig.IntermissionDuration or 10
+		for t = intermission, 1, -1 do
+			broadcastTimer(t)
+			task.wait(1)
+		end
+
+		-- ACTIVE ROUND
+		State.phase = "Active"
+		resetRoundKills()
+		initVehicles()
+		initHealthPacks()
+
+		local duration = WorldConfig.RoundDuration or 180
+		State.roundEndsAt = os.time() + duration
+
+		for t = duration, 0, -1 do
+			broadcastTimer(t)
+			-- Early exit if only one (or zero) players remain
+			if #Players:GetPlayers() < 2 then break end
+			task.wait(1)
+		end
+
+		-- END OF ROUND
+		endRound()
+		-- Brief post-round pause before looping back to Waiting
+		task.wait(WorldConfig.IntermissionDuration or 10)
+	end
+end
+
+-- ── Public module API ─────────────────────────────────────────────────────────
+local GameManager = {}
+
+function GameManager.getKills(player)
+	return State.killCounts[player.UserId] or 0
+end
+
+function GameManager.getPhase()
+	return State.phase
+end
+
+function GameManager.getSessionData(player)
+	return sessionData[player.UserId]
+end
+
+-- Start round loop in a background thread
+task.spawn(roundLoop)
+
+return GameManager
