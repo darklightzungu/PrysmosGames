@@ -108,17 +108,26 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		pickupItemRemote:FireServer()
 
 	elseif input.KeyCode == Enum.KeyCode.Q then
-		-- Q key: throw left
-		throwItemRemote:FireServer(getThrowDirection("left"))
+		-- Q: throw left — negate camera right vector
+		throwItemRemote:FireServer(-camera.CFrame.RightVector, 60)
+		print("[MobileControls] Throw fired")
+
+	elseif input.KeyCode == Enum.KeyCode.R then
+		-- R: throw right — camera right vector
+		throwItemRemote:FireServer(camera.CFrame.RightVector, 60)
+		print("[MobileControls] Throw fired")
 	end
 end)
 
--- Left click while holding item: throw forward
+-- Left click while holding item: ray from camera through mouse position
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
 		if isHoldingItem() then
-			throwItemRemote:FireServer(getThrowDirection("forward"))
+			local mousePos = UserInputService:GetMouseLocation()
+			local ray = camera:ScreenPointToRay(mousePos.X, mousePos.Y)
+			throwItemRemote:FireServer(ray.Direction, 60)
+			print("[MobileControls] Throw fired")
 		end
 	end
 end)
