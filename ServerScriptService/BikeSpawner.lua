@@ -111,9 +111,10 @@ local function ensureVehicleSeat(model)
 		end
 	end
 
-	seat.MaxSpeed  = 60
-	seat.Torque    = 8
-	seat.TurnSpeed = 1.2
+	seat.MaxSpeed        = 50
+	seat.Torque          = 12
+	seat.TurnSpeed       = 2.5
+	seat.HeadsUpDisplay  = false
 	return seat
 end
 
