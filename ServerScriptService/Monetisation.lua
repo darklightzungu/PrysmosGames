@@ -1,6 +1,8 @@
 -- Monetisation.lua
--- Route Rage Terrain — GamePass & DevProduct wiring
+-- Route Rage — GamePass & DevProduct wiring
 -- Place in: ServerScriptService
+-- Replace GAMEPASS_ID_PLACEHOLDER and DEVPRODUCT_ID_PLACEHOLDER
+-- after setting up products in the Roblox Creator Dashboard.
 
 local MarketplaceService = game:GetService("MarketplaceService")
 local Players            = game:GetService("Players")
@@ -9,45 +11,31 @@ local ReplicatedStorage  = game:GetService("ReplicatedStorage")
 local Monetisation = {}
 
 -- ── Product IDs ──────────────────────────────────────────────────────────────
+
 local GAMEPASSES = {
-	SpeedDemon   = GAMEPASS_ID_PLACEHOLDER,  -- 299 Robux — permanent top-speed boost for all vehicles
-	VehiclePack  = GAMEPASS_ID_PLACEHOLDER,  -- 499 Robux — unlocks exclusive vehicle skin bundle
-	DoubleCoins  = GAMEPASS_ID_PLACEHOLDER,  -- 199 Robux — 2× coin earnings from all race finishes
+	RoadRager    = GAMEPASS_ID_PLACEHOLDER,  -- 299 Robux — exclusive vehicle skin bundle + boost
+	NitroInfinity = GAMEPASS_ID_PLACEHOLDER, -- 499 Robux — permanent unlimited nitro charges
+	VIPLane      = GAMEPASS_ID_PLACEHOLDER,  -- 199 Robux — VIP tag, exclusive lane, 2× XP
 }
 
 local DEVPRODUCTS = {
-	CoinBoost_500  = DEVPRODUCT_ID_PLACEHOLDER,  -- 75 Robux  — instantly grants 500 coins
-	CoinBoost_1500 = DEVPRODUCT_ID_PLACEHOLDER,  -- 175 Robux — instantly grants 1 500 coins
-	Nitro_Refill   = DEVPRODUCT_ID_PLACEHOLDER,  -- 50 Robux  — fully refills nitro tank mid-race
+	NitroPack     = DEVPRODUCT_ID_PLACEHOLDER,  -- 49 Robux  — instant 5× nitro refill
+	CoinBoost     = DEVPRODUCT_ID_PLACEHOLDER,  -- 99 Robux  — 2× coin multiplier for 30 minutes
+	RespawnShield = DEVPRODUCT_ID_PLACEHOLDER,  -- 75 Robux  — one-time crash immunity shield
 }
 
--- ── Remotes (created if absent) ──────────────────────────────────────────────
-local function getOrCreateRemote(name, class)
-	local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-	if not remotes then
-		remotes = Instance.new("Folder")
-		remotes.Name = "Remotes"
-		remotes.Parent = ReplicatedStorage
-	end
-	local remote = remotes:FindFirstChild(name)
-	if not remote then
-		remote = Instance.new(class)
-		remote.Name = name
-		remote.Parent = remotes
-	end
-	return remote
-end
+-- Expose tables publicly so other scripts can reference IDs
+Monetisation.GAMEPASSES  = GAMEPASSES
+Monetisation.DEVPRODUCTS = DEVPRODUCTS
 
-local grantCoinsEvent  = getOrCreateRemote("GrantCoins",        "RemoteEvent")
-local refillNitroEvent = getOrCreateRemote("RefillNitro",       "RemoteEvent")
-local applyVehiclePack = getOrCreateRemote("ApplyVehiclePack",  "RemoteEvent")
-local applySpeedBoost  = getOrCreateRemote("ApplySpeedBoost",   "RemoteEvent")
+-- ── Remotes (must exist in ReplicatedStorage.Remotes) ───────────────────────
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
 
 -- ── Ownership cache ──────────────────────────────────────────────────────────
 local ownershipCache = {}  -- [userId][passId] = bool
 
--- Checks (and caches) whether a player owns the named GamePass.
-local function hasPremiumPass(player, passName)
+-- hasPremiumPass: returns true if the player owns the named GamePass
+function Monetisation.hasPremiumPass(player, passName)
 	local passId = GAMEPASSES[passName]
 	if not passId then
 		warn("[Monetisation] Unknown GamePass name:", passName)
@@ -57,8 +45,9 @@ local function hasPremiumPass(player, passName)
 	local uid = player.UserId
 	ownershipCache[uid] = ownershipCache[uid] or {}
 
+	-- Return cached result to avoid redundant API calls
 	if ownershipCache[uid][passId] ~= nil then
-		return ownershipCache[uid][passId]  -- return cached result
+		return ownershipCache[uid][passId]
 	end
 
 	local ok, result = pcall(function()
@@ -69,8 +58,6 @@ local function hasPremiumPass(player, passName)
 	ownershipCache[uid][passId] = owns
 	return owns
 end
-
-Monetisation.hasPremiumPass = hasPremiumPass
 
 -- ── Prompt helpers ───────────────────────────────────────────────────────────
 function Monetisation.promptGamePass(player, passName)
@@ -88,27 +75,34 @@ end
 -- ── ProcessReceipt ───────────────────────────────────────────────────────────
 local function processReceipt(receiptInfo)
 	local player = Players:GetPlayerByUserId(receiptInfo.PlayerId)
-	-- If the player has left, retry later
+
+	-- Player may have left; defer until they rejoin
 	if not player then
 		return Enum.ProductPurchaseDecision.NotProcessedYet
 	end
 
 	local productId = receiptInfo.ProductId
 
-	if productId == DEVPRODUCTS.CoinBoost_500 then
-		-- Tell the client (and any listening server scripts) to award 500 coins
-		grantCoinsEvent:FireClient(player, 500)
+	if productId == DEVPRODUCTS.NitroPack then
+		-- Tell the client to refill nitro × 5 immediately
+		local nitroEvent = remotes:FindFirstChild("RefillNitro")
+		if nitroEvent then
+			nitroEvent:FireClient(player, 5)
+		end
 
-	elseif productId == DEVPRODUCTS.CoinBoost_1500 then
-		-- Award 1 500 coins
-		grantCoinsEvent:FireClient(player, 1500)
+	elseif productId == DEVPRODUCTS.CoinBoost then
+		-- Tell the client (and server logic) to activate a 2× coin multiplier
+		local boostEvent = remotes:FindFirstChild("ActivateCoinBoost")
+		if boostEvent then
+			boostEvent:FireClient(player, 2, 1800)  -- multiplier, duration in seconds
+		end
 
-	elseif productId == DEVPRODUCTS.Nitro_Refill then
-		-- Signal client to instantly refill the player's nitro gauge
-		refillNitroEvent:FireClient(player)
-
-	else
-		warn("[Monetisation] Unhandled DevProduct ID:", productId)
+	elseif productId == DEVPRODUCTS.RespawnShield then
+		-- Grant a one-time crash immunity shield
+		local shieldEvent = remotes:FindFirstChild("GrantRespawnShield")
+		if shieldEvent then
+			shieldEvent:FireClient(player)
+		end
 	end
 
 	return Enum.ProductPurchaseDecision.PurchaseGranted
@@ -116,32 +110,40 @@ end
 
 MarketplaceService.ProcessReceipt = processReceipt
 
--- ── Apply GamePass perks on spawn ────────────────────────────────────────────
+-- ── Apply GamePass perks on character spawn ──────────────────────────────────
 Players.PlayerAdded:Connect(function(player)
-	-- Invalidate cache on join so we always fetch fresh data
-	ownershipCache[player.UserId] = nil
-
 	player.CharacterAdded:Connect(function()
-		-- Vehicle skin bundle
-		if hasPremiumPass(player, "VehiclePack") then
-			applyVehiclePack:FireClient(player)
+		-- NitroInfinity pass: notify client to enable limitless nitro UI
+		if Monetisation.hasPremiumPass(player, "NitroInfinity") then
+			local nitroInfinityEvent = remotes:FindFirstChild("EnableInfiniteNitro")
+			if nitroInfinityEvent then
+				nitroInfinityEvent:FireClient(player)
+			end
 		end
 
-		-- Persistent top-speed boost
-		if hasPremiumPass(player, "SpeedDemon") then
-			applySpeedBoost:FireClient(player)
+		-- VIPLane pass: apply VIP perks (tag, lane access, XP multiplier)
+		if Monetisation.hasPremiumPass(player, "VIPLane") then
+			local vipEvent = remotes:FindFirstChild("ApplyVIPPerks")
+			if vipEvent then
+				vipEvent:FireClient(player)
+			end
 		end
-		-- DoubleCoins is checked server-side at coin-award time via hasPremiumPass
+
+		-- RoadRager pass: apply exclusive vehicle skin bundle
+		if Monetisation.hasPremiumPass(player, "RoadRager") then
+			local skinEvent = remotes:FindFirstChild("ApplyRoadRagerSkin")
+			if skinEvent then
+				skinEvent:FireClient(player)
+			end
+		end
+	end)
+
+	-- Clear cache when the player leaves to free memory
+	player.AncestryChanged:Connect(function()
+		if not player:IsDescendantOf(game) then
+			ownershipCache[player.UserId] = nil
+		end
 	end)
 end)
-
-Players.PlayerRemoving:Connect(function(player)
-	-- Free memory when player leaves
-	ownershipCache[player.UserId] = nil
-end)
-
--- ── Exports ──────────────────────────────────────────────────────────────────
-Monetisation.GAMEPASSES  = GAMEPASSES
-Monetisation.DEVPRODUCTS = DEVPRODUCTS
 
 return Monetisation

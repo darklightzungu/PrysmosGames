@@ -1,20 +1,23 @@
 -- WorldBuilder.lua
--- Procedurally builds the Starter Suburbs district for Route Rage Terrain
+-- Route Rage — Starter Suburbs District Builder
 -- Place in: ServerScriptService
--- Runs once on server start
+-- Runs once on server start; procedurally builds StarterSuburbs geometry.
 
 local CollectionService = game:GetService("CollectionService")
 local WorldConfig       = require(script.Parent:WaitForChild("WorldConfig"))
 
+local AREA         = WorldConfig.Areas and WorldConfig.Areas[1] or {}
+local SPAWN_POINTS = AREA.spawnPoints or {}
+
 -- Counters for final summary print
-local roadCount  = 0
+local roadCount   = 0
 local hazardCount = 0
-local spawnCount = 0
+local spawnCount  = 0
 
 -- ── Root Model & Folders ─────────────────────────────────────────────────────
 
 local suburbsModel = Instance.new("Model")
-suburbsModel.Name   = "StarterSuburbs"
+suburbsModel.Name  = "StarterSuburbs"
 suburbsModel.Parent = workspace
 
 local roadsFolder    = Instance.new("Folder")
@@ -35,8 +38,8 @@ shortcutsFolder.Parent = suburbsModel
 
 -- ── Helpers ──────────────────────────────────────────────────────────────────
 
--- Creates an anchored Part with common properties and parents it to the given folder
-local function makePart(name, size, cframe, color, material, parent)
+-- Creates and returns an Anchored Part with the given properties
+local function makePart(name, size, cframe, color, material, canCollide, parent)
     local p          = Instance.new("Part")
     p.Name           = name
     p.Size           = size
@@ -44,7 +47,7 @@ local function makePart(name, size, cframe, color, material, parent)
     p.Color          = color
     p.Material       = material
     p.Anchored       = true
-    p.CanCollide     = true
+    p.CanCollide     = canCollide ~= false  -- defaults to true
     p.CastShadow     = true
     p.Parent         = parent
     return p
@@ -60,97 +63,66 @@ end
 -- ── Roads ────────────────────────────────────────────────────────────────────
 
 local function buildRoads()
-    local asphaltColor = Color3.fromRGB(40, 40, 40)
-    local asphalt      = Enum.Material.Asphalt
+    local asphalt   = Enum.Material.Asphalt
+    local darkGray  = Color3.fromRGB(40, 40, 40)
 
-    -- Main road running along X axis
-    makePart("MainRoad",
-        Vector3.new(200, 2, 20),
-        CFrame.new(0, 0, 0),
-        asphaltColor, asphalt, roadsFolder)
-    roadCount += 1
+    local roadDefs = {
+        { name = "MainRoad",      size = Vector3.new(200, 2, 20),  cf = CFrame.new(0,  0,   0), mat = asphalt,           color = darkGray                    },
+        { name = "CrossStreet1",  size = Vector3.new(100, 2, 16),  cf = CFrame.new(0,  0,  60), mat = asphalt,           color = darkGray                    },
+        { name = "CrossStreet2",  size = Vector3.new(100, 2, 16),  cf = CFrame.new(0,  0, -60), mat = asphalt,           color = darkGray                    },
+        -- Slightly raised to prevent z-fighting with cross streets
+        { name = "Intersection1", size = Vector3.new(20, 2, 20),   cf = CFrame.new(0,  0.05, 60), mat = asphalt,         color = darkGray                    },
+        { name = "Intersection2", size = Vector3.new(20, 2, 20),   cf = CFrame.new(0,  0.05,-60), mat = asphalt,         color = darkGray                    },
+        { name = "Ground",        size = Vector3.new(400, 2, 400), cf = CFrame.new(0, -2,   0), mat = Enum.Material.Grass, color = Color3.fromRGB(80, 140, 60) },
+    }
 
-    -- Cross street north (+Z)
-    makePart("CrossStreet1",
-        Vector3.new(100, 2, 16),
-        CFrame.new(0, 0, 60),
-        asphaltColor, asphalt, roadsFolder)
-    roadCount += 1
-
-    -- Cross street south (-Z)
-    makePart("CrossStreet2",
-        Vector3.new(100, 2, 16),
-        CFrame.new(0, 0, -60),
-        asphaltColor, asphalt, roadsFolder)
-    roadCount += 1
-
-    -- Intersection pad north — slightly raised to prevent Z-fighting with MainRoad
-    makePart("Intersection1",
-        Vector3.new(20, 2, 20),
-        CFrame.new(0, 0.05, 60),
-        Color3.fromRGB(35, 35, 35), asphalt, roadsFolder)
-    roadCount += 1
-
-    -- Intersection pad south
-    makePart("Intersection2",
-        Vector3.new(20, 2, 20),
-        CFrame.new(0, 0.05, -60),
-        Color3.fromRGB(35, 35, 35), asphalt, roadsFolder)
-    roadCount += 1
-
-    -- Large grass ground plane beneath everything
-    makePart("Ground",
-        Vector3.new(400, 2, 400),
-        CFrame.new(0, -2, 0),
-        Color3.fromRGB(80, 140, 60),
-        Enum.Material.Grass, roadsFolder)
-    roadCount += 1
+    for _, def in ipairs(roadDefs) do
+        makePart(def.name, def.size, def.cf, def.color, def.mat, true, roadsFolder)
+        roadCount = roadCount + 1
+    end
 end
 
 -- ── Spawn Pads ───────────────────────────────────────────────────────────────
 
 local function buildSpawnPads()
-    -- Pull spawn positions from WorldConfig; fall back to empty table if absent
-    local area        = (WorldConfig.Areas and WorldConfig.Areas[1]) or {}
-    local spawnPoints = area.spawnPoints or {}
-
-    for i, spawnPos in ipairs(spawnPoints) do
-        -- Pad sits 1.25 studs above the road surface
+    for i, spawnPos in ipairs(SPAWN_POINTS) do
         local pad = makePart(
             "SpawnPad_" .. i,
             Vector3.new(6, 0.5, 6),
-            CFrame.new(spawnPos + Vector3.new(0, 1.25, 0)),
+            CFrame.new(spawnPos + Vector3.new(0, 1.25, 0)),  -- rest on road surface
             Color3.fromRGB(0, 162, 255),
             Enum.Material.Neon,
+            true,
             spawnPadsFolder
         )
+
         tag(pad, "SpawnPoint", "SpawnPad")
 
-        -- Billboard label floating above the pad
-        local billboard            = Instance.new("BillboardGui")
-        billboard.Name             = "SpawnLabel"
-        billboard.Size             = UDim2.new(0, 60, 0, 20)
-        billboard.StudsOffset      = Vector3.new(0, 3, 0)
-        billboard.AlwaysOnTop      = false
-        billboard.Parent           = pad
+        -- BillboardGui label so the spawn is identifiable in-world
+        local billboard        = Instance.new("BillboardGui")
+        billboard.Name         = "SpawnLabel"
+        billboard.Size         = UDim2.new(0, 60, 0, 20)
+        billboard.StudsOffset  = Vector3.new(0, 3, 0)
+        billboard.AlwaysOnTop  = false
+        billboard.Parent       = pad
 
-        local label                = Instance.new("TextLabel")
-        label.Text                 = "SPAWN"
-        label.TextColor3           = Color3.new(1, 1, 1)
-        label.Font                 = Enum.Font.GothamBold
-        label.TextSize             = 14
+        local label            = Instance.new("TextLabel")
+        label.Text             = "SPAWN"
+        label.TextColor3       = Color3.new(1, 1, 1)
+        label.Font             = Enum.Font.GothamBold
+        label.TextSize         = 14
+        label.Size             = UDim2.new(1, 0, 1, 0)
         label.BackgroundTransparency = 1
-        label.Size                 = UDim2.new(1, 0, 1, 0)
-        label.Parent               = billboard
+        label.Parent           = billboard
 
-        spawnCount += 1
+        spawnCount = spawnCount + 1
     end
 end
 
 -- ── Hazard Props ─────────────────────────────────────────────────────────────
 
 local function buildHazardProps()
-    -- ── Hazard Cars ──────────────────────────────────────────────────────────
+    -- HazardCar × 4 — parked cars blocking lanes
     local carPositions = {
         Vector3.new(-70, 2,  12),
         Vector3.new(-30, 2, -12),
@@ -164,20 +136,21 @@ local function buildHazardProps()
             CFrame.new(pos),
             Color3.fromRGB(80, 80, 90),
             Enum.Material.SmoothPlastic,
+            true,
             hazardsFolder
         )
         tag(car, "HazardCar", "HazardProp")
-        hazardCount += 1
+        hazardCount = hazardCount + 1
     end
 
-    -- ── Traffic Cones ────────────────────────────────────────────────────────
+    -- HazardCone × 6 — traffic cones at junctions and mid-road
     local conePositions = {
-        Vector3.new(-10, 2,   9),
-        Vector3.new(-10, 2,  -9),
-        Vector3.new(  0, 2,  69),
-        Vector3.new(  0, 2, -69),
-        Vector3.new( 10, 2,   9),
-        Vector3.new( 10, 2,  -9),
+        Vector3.new(-10, 2,  9),
+        Vector3.new(-10, 2, -9),
+        Vector3.new(  0, 2, 69),
+        Vector3.new(  0, 2,-69),
+        Vector3.new( 10, 2,  9),
+        Vector3.new( 10, 2, -9),
     }
     for i, pos in ipairs(conePositions) do
         local cone = makePart(
@@ -186,13 +159,14 @@ local function buildHazardProps()
             CFrame.new(pos),
             Color3.fromRGB(255, 100, 0),
             Enum.Material.SmoothPlastic,
+            true,
             hazardsFolder
         )
         tag(cone, "HazardCone", "HazardProp")
-        hazardCount += 1
+        hazardCount = hazardCount + 1
     end
 
-    -- ── Concrete Barriers ────────────────────────────────────────────────────
+    -- HazardBarrier × 2 — concrete dividers mid-block
     local barrierPositions = {
         Vector3.new(-50, 2, 0),
         Vector3.new( 50, 2, 0),
@@ -204,63 +178,65 @@ local function buildHazardProps()
             CFrame.new(pos),
             Color3.fromRGB(240, 200, 0),
             Enum.Material.SmoothPlastic,
+            true,
             hazardsFolder
         )
         tag(barrier, "HazardBarrier", "HazardProp")
-        hazardCount += 1
+        hazardCount = hazardCount + 1
     end
 end
 
--- ── Shortcuts ─────────────────────────────────────────────────────────────────
+-- ── Shortcuts ────────────────────────────────────────────────────────────────
 
 local function buildShortcuts()
-    local shortcutColor    = Color3.fromRGB(100, 160, 70)
-    local shortcutMaterial = Enum.Material.Grass
+    local shortcutColor = Color3.fromRGB(100, 160, 70)
 
-    -- Risky cut-through path 1 (north-east side)
+    -- ShortcutPath_1 — right-side cut-through
     makePart(
         "ShortcutPath_1",
         Vector3.new(6, 2, 40),
         CFrame.new(55, 0, 30),
-        shortcutColor, shortcutMaterial, shortcutsFolder
+        shortcutColor,
+        Enum.Material.Grass,
+        true,
+        shortcutsFolder
     )
 
-    -- Risky cut-through path 2 (south-west side)
+    -- ShortcutPath_2 — left-side cut-through
     makePart(
         "ShortcutPath_2",
         Vector3.new(6, 2, 40),
         CFrame.new(-55, 0, -30),
-        shortcutColor, shortcutMaterial, shortcutsFolder
+        shortcutColor,
+        Enum.Material.Grass,
+        true,
+        shortcutsFolder
     )
 
-    -- ── Trigger Zones (invisible, non-collidable) ─────────────────────────────
-
-    -- Sprinkler hazard trigger on path 1
-    local sprinkler           = Instance.new("Part")
-    sprinkler.Name            = "Hazard_Sprinkler"
-    sprinkler.Size            = Vector3.new(6, 0.1, 6)
-    sprinkler.CFrame          = CFrame.new(55, 0, 10)
-    sprinkler.Transparency    = 0.8
-    sprinkler.CanCollide      = false
-    sprinkler.Anchored        = true
-    sprinkler.CastShadow      = false
-    sprinkler.Color           = Color3.fromRGB(0, 180, 255)  -- visual hint in Studio
-    sprinkler.Material        = Enum.Material.Neon
-    sprinkler.Parent          = shortcutsFolder
+    -- Sprinkler trigger zone (invisible sensor on right shortcut)
+    local sprinkler              = makePart(
+        "Hazard_Sprinkler",
+        Vector3.new(6, 0.1, 6),
+        CFrame.new(55, 0, 10),
+        Color3.fromRGB(0, 150, 255),
+        Enum.Material.SmoothPlastic,
+        false,      -- no collision; acts as a touch sensor
+        shortcutsFolder
+    )
+    sprinkler.Transparency = 0.8
     tag(sprinkler, "Hazard_Sprinkler")
 
-    -- Dog hazard trigger on path 2
-    local dog              = Instance.new("Part")
-    dog.Name               = "Hazard_Dog"
-    dog.Size               = Vector3.new(4, 0.1, 4)
-    dog.CFrame             = CFrame.new(-55, 0, -10)
-    dog.Transparency       = 0.8
-    dog.CanCollide         = false
-    dog.Anchored           = true
-    dog.CastShadow         = false
-    dog.Color              = Color3.fromRGB(255, 180, 0)     -- visual hint in Studio
-    dog.Material           = Enum.Material.Neon
-    dog.Parent             = shortcutsFolder
+    -- Dog trigger zone (invisible sensor on left shortcut)
+    local dog                    = makePart(
+        "Hazard_Dog",
+        Vector3.new(4, 0.1, 4),
+        CFrame.new(-55, 0, -10),
+        Color3.fromRGB(180, 120, 60),
+        Enum.Material.SmoothPlastic,
+        false,
+        shortcutsFolder
+    )
+    dog.Transparency = 0.8
     tag(dog, "Hazard_Dog")
 end
 
@@ -281,8 +257,11 @@ local function buildWorld()
     ok, err = pcall(buildShortcuts)
     if not ok then warn("[WorldBuilder] buildShortcuts failed:", err) end
 
-    print("[WorldBuilder] Starter Suburbs built: " .. roadCount .. " roads, "
-          .. hazardCount .. " hazards, " .. spawnCount .. " spawn pads")
+    print(
+        "[WorldBuilder] Starter Suburbs built: " .. roadCount .. " roads, "
+        .. hazardCount .. " hazards, "
+        .. spawnCount  .. " spawn pads"
+    )
 end
 
 buildWorld()
