@@ -1,179 +1,183 @@
--- world_config.lua
--- Route Rage Terrain — Zone & Spawn Configuration
+-- WorldConfig.lua
+-- Route Rage Content — World & Game Configuration
 -- Place in: ServerScriptService
--- DO NOT modify area names — agents reference them by name.
+-- DO NOT rename area entries — agents and systems reference them by name.
 
 local WorldConfig = {}
 
-WorldConfig.GameName   = "route-rage-terrain"
-WorldConfig.MaxPlayers = 16
-WorldConfig.RoundDuration        = 240  -- seconds per round
-WorldConfig.IntermissionDuration = 20   -- seconds between rounds
-WorldConfig.DefaultArea          = "HighwayClash"
+WorldConfig.GameName   = "route-rage-content"
+WorldConfig.MaxPlayers = 12
+WorldConfig.RoundDuration        = 210  -- seconds per round
+WorldConfig.IntermissionDuration = 15   -- seconds between rounds
+WorldConfig.DefaultArea          = "Highway101"
 
--- ──────────────────────────────────────────────
--- Areas
--- ──────────────────────────────────────────────
+-- ─────────────────────────────────────────────
+--  Areas
+--  Spawn points are positioned above road/surface level (+4 Y offset)
+--  so characters land cleanly without clipping.
+-- ─────────────────────────────────────────────
 WorldConfig.Areas = {
 	{
-		name        = "HighwayClash",
-		displayName = "Highway Clash",
+		name        = "Highway101",
+		displayName = "Highway 101",
+		description = "A wide multi-lane expressway — high speed, low cover.",
 		size        = "large",
-		maxPlayers  = 16,
-		-- Spawn points flanking a multi-lane highway strip
+		maxPlayers  = 12,
 		spawnPoints = {
-			Vector3.new(90,  4,  20),
-			Vector3.new(-90, 4,  20),
-			Vector3.new(90,  4, -20),
-			Vector3.new(-90, 4, -20),
-			Vector3.new(60,  4,  50),
-			Vector3.new(-60, 4,  50),
-			Vector3.new(60,  4, -50),
-			Vector3.new(-60, 4, -50),
+			Vector3.new( 80,  4,  20),
+			Vector3.new(-80,  4,  20),
+			Vector3.new( 80,  4, -20),
+			Vector3.new(-80,  4, -20),
+			Vector3.new(  0,  4,  50),
+			Vector3.new(  0,  4, -50),
+			Vector3.new( 40,  4,   0),
+			Vector3.new(-40,  4,   0),
 		},
-		ambientColor      = Color3.fromRGB(90, 80, 60),
-		ambientBrightness = 0.65,
-		fogColor          = Color3.fromRGB(70, 65, 55),
+		ambientColor      = Color3.fromRGB(180, 160, 120),
+		ambientBrightness = 0.7,
+		fogColor          = Color3.fromRGB(200, 190, 160),
 		fogEnd            = 900,
-		-- Destructible/cover props expected in workspace via CollectionService tags
-		coverTags = { "Cover_Car", "Cover_Barrier", "Cover_Truck", "Cover_Guardrail" },
+		-- Props/tags expected in Workspace for this area
+		coverTags  = { "Cover_GuardRail", "Cover_Car", "Cover_OverpassPillar" },
+		hazardTags = { "Hazard_OncomingTraffic", "Hazard_OilSlick" },
 	},
 	{
-		name        = "UrbanIntersection",
-		displayName = "Urban Intersection",
+		name        = "DowntownGrid",
+		displayName = "Downtown Grid",
+		description = "Dense city blocks with intersections and tight alleys.",
 		size        = "medium",
-		maxPlayers  = 12,
-		-- Four-way city crossroads; spawns tucked behind building corners
+		maxPlayers  = 10,
 		spawnPoints = {
-			Vector3.new(40,  4,  40),
-			Vector3.new(-40, 4,  40),
-			Vector3.new(40,  4, -40),
-			Vector3.new(-40, 4, -40),
-			Vector3.new(0,   4,  55),
-			Vector3.new(0,   4, -55),
+			Vector3.new( 50,  4,  50),
+			Vector3.new(-50,  4,  50),
+			Vector3.new( 50,  4, -50),
+			Vector3.new(-50,  4, -50),
+			Vector3.new(  0,  4,  60),
+			Vector3.new(  0,  4, -60),
 		},
-		ambientColor      = Color3.fromRGB(60, 55, 70),
+		ambientColor      = Color3.fromRGB(80, 80, 110),
 		ambientBrightness = 0.5,
-		fogColor          = Color3.fromRGB(40, 40, 60),
+		fogColor          = Color3.fromRGB(60, 60, 90),
 		fogEnd            = 500,
-		coverTags = { "Cover_Car", "Cover_Dumpster", "Cover_Wall", "Cover_Pillar" },
+		coverTags  = { "Cover_Car", "Cover_Dumpster", "Cover_NewsStand", "Cover_Wall" },
+		hazardTags = { "Hazard_Pothole", "Hazard_Pedestrian" },
+	},
+	{
+		name        = "IndustrialPort",
+		displayName = "Industrial Port",
+		description = "Cargo yard with shipping containers and fork-lift lanes.",
+		size        = "medium",
+		maxPlayers  = 8,
+		spawnPoints = {
+			Vector3.new( 60,  4,  30),
+			Vector3.new(-60,  4,  30),
+			Vector3.new( 60,  4, -30),
+			Vector3.new(-60,  4, -30),
+			Vector3.new(  0,  4,  70),
+			Vector3.new(  0,  4, -70),
+		},
+		ambientColor      = Color3.fromRGB(60, 70, 60),
+		ambientBrightness = 0.45,
+		fogColor          = Color3.fromRGB(40, 50, 40),
+		fogEnd            = 400,
+		coverTags  = { "Cover_Container", "Cover_Crate", "Cover_Forklift", "Cover_Wall" },
+		hazardTags = { "Hazard_SwingCrane", "Hazard_OilSlick" },
+	},
+	{
+		name        = "SuburbanLoop",
+		displayName = "Suburban Loop",
+		description = "Quiet residential streets — narrow roads, parked cars everywhere.",
+		size        = "small",
+		maxPlayers  = 6,
+		spawnPoints = {
+			Vector3.new( 25,  4,  25),
+			Vector3.new(-25,  4,  25),
+			Vector3.new( 25,  4, -25),
+			Vector3.new(-25,  4, -25),
+		},
+		ambientColor      = Color3.fromRGB(140, 180, 120),
+		ambientBrightness = 0.65,
+		fogColor          = Color3.fromRGB(180, 200, 160),
+		fogEnd            = 350,
+		coverTags  = { "Cover_Car", "Cover_Hedge", "Cover_Mailbox", "Cover_Fence" },
+		hazardTags = { "Hazard_SpeedBump", "Hazard_Pedestrian" },
 	},
 	{
 		name        = "TunnelRun",
 		displayName = "Tunnel Run",
+		description = "Underground tunnel — chokepoint chaos, limited escape routes.",
 		size        = "small",
-		maxPlayers  = 8,
-		-- Tight tunnel corridor; spawns at each mouth and mid-side alcoves
+		maxPlayers  = 6,
 		spawnPoints = {
-			Vector3.new(70,  3,   0),
-			Vector3.new(-70, 3,   0),
-			Vector3.new(30,  3,  10),
-			Vector3.new(-30, 3,  10),
-			Vector3.new(30,  3, -10),
-			Vector3.new(-30, 3, -10),
+			Vector3.new( 90,  4,   0),
+			Vector3.new(-90,  4,   0),
+			Vector3.new( 60,  4,  10),
+			Vector3.new(-60,  4, -10),
 		},
 		ambientColor      = Color3.fromRGB(30, 30, 40),
-		ambientBrightness = 0.3,
+		ambientBrightness = 0.25,
 		fogColor          = Color3.fromRGB(20, 20, 30),
-		fogEnd            = 250,
-		coverTags = { "Cover_Barrel", "Cover_Crate", "Cover_Pillar" },
-	},
-	{
-		name        = "BridgeBattle",
-		displayName = "Bridge Battle",
-		size        = "medium",
-		maxPlayers  = 12,
-		-- Elevated bridge; spawns at bridge ends and on lower support platforms
-		spawnPoints = {
-			Vector3.new(100, 12,   5),
-			Vector3.new(-100,12,   5),
-			Vector3.new(100, 12,  -5),
-			Vector3.new(-100,12,  -5),
-			Vector3.new(0,   8,  15),  -- lower support platform
-			Vector3.new(0,   8, -15),
-		},
-		ambientColor      = Color3.fromRGB(50, 70, 90),
-		ambientBrightness = 0.55,
-		fogColor          = Color3.fromRGB(30, 50, 80),
-		fogEnd            = 600,
-		coverTags = { "Cover_Car", "Cover_Barrier", "Cover_Crate" },
-	},
-	{
-		name        = "ConstructionZone",
-		displayName = "Construction Zone",
-		size        = "large",
-		maxPlayers  = 16,
-		-- Open construction site with elevated scaffolding; multi-level spawns
-		spawnPoints = {
-			Vector3.new(75,  4,  75),
-			Vector3.new(-75, 4,  75),
-			Vector3.new(75,  4, -75),
-			Vector3.new(-75, 4, -75),
-			Vector3.new(0,  14,  40),  -- scaffolding level
-			Vector3.new(0,  14, -40),
-			Vector3.new(50, 14,   0),
-			Vector3.new(-50,14,   0),
-		},
-		ambientColor      = Color3.fromRGB(80, 70, 50),
-		ambientBrightness = 0.6,
-		fogColor          = Color3.fromRGB(65, 55, 40),
-		fogEnd            = 750,
-		coverTags = { "Cover_Crate", "Cover_Wall", "Cover_Barrel", "Cover_Scaffold", "Cover_Truck" },
+		fogEnd            = 180,
+		coverTags  = { "Cover_BarrierCone", "Cover_BrokenPillar", "Cover_Car" },
+		hazardTags = { "Hazard_LowCeiling", "Hazard_FloodWater" },
 	},
 }
 
--- ──────────────────────────────────────────────
--- Combat Configuration
--- ──────────────────────────────────────────────
+-- ─────────────────────────────────────────────
+--  CombatConfig — action/vehicular combat tuning
+-- ─────────────────────────────────────────────
 WorldConfig.CombatConfig = {
+	-- Vehicle stats base values (scaled by upgrades)
+	BaseVehicleSpeed      = 60,   -- studs/s
+	MaxVehicleSpeed       = 160,  -- studs/s with full boost
+	BoostDuration         = 3,    -- seconds per boost charge
+	BoostCooldown         = 8,    -- seconds before next boost
+
+	-- Weapon / projectile settings
+	RamDamageBase         = 35,   -- damage dealt on direct vehicle ram
+	ProjectileDamageBase  = 20,   -- damage per standard projectile hit
+	ProjectileSpeed       = 120,  -- studs/s
+	ProjectileLifetime    = 4,    -- seconds before projectile expires
+
 	-- Health & respawn
-	PlayerMaxHealth      = 100,
-	RespawnDelay         = 5,      -- seconds before a dead player respawns
-	RespawnInvincibility = 2.5,    -- seconds of spawn protection
+	PlayerMaxHealth       = 100,
+	VehicleMaxHealth      = 250,
+	RespawnDelay          = 5,    -- seconds after elimination
 
-	-- Damage tuning
-	MeleeDamage          = 35,
-	MeleeRange           = 6,      -- studs
-	MeleeCooldown        = 0.8,    -- seconds between swings
+	-- Scoring
+	EliminationPoints     = 100,
+	AssistPoints          = 50,
+	HazardKillBonus       = 25,   -- bonus for using environmental hazards
+	FirstBloodBonus       = 75,
 
-	-- Weapon slots available to all players
-	DefaultWeaponSlots   = { "Pistol", "Melee" },
+	-- Power-up spawns
+	PowerUpRespawnTime    = 20,   -- seconds between power-up respawns
+	PowerUpTypes = {
+		"Repair",        -- restores vehicle HP
+		"SpeedBoost",    -- temporary top-speed increase
+		"Ammo",          -- replenishes projectile count
+		"Shield",        -- temporary damage immunity
+	},
 
-	-- Pickup item tags expected in workspace via CollectionService
-	AmmoPickupTag        = "Pickup_Ammo",
-	HealthPickupTag      = "Pickup_Health",
-	WeaponPickupTag      = "Pickup_Weapon",
-
-	-- Kill streak thresholds and reward DevProduct IDs
-	KillStreakThresholds = { 3, 5, 10 },
-
-	-- Vehicle combat (core to the route-rage theme)
-	VehiclesEnabled      = true,
-	VehicleMaxSpeed      = 120,    -- studs/s
-	VehicleRamDamage     = 50,     -- damage dealt on collision with another player
-	VehicleRamCooldown   = 1.5,    -- seconds between ram damage events per vehicle
-	VehicleHealthPool    = 300,    -- vehicle hitpoints before it is destroyed
-	VehicleRespawnDelay  = 12,     -- seconds before a destroyed vehicle respawns
-
-	-- Score settings
-	KillScore            = 10,
-	AssistScore          = 5,
-	VehicleKillBonus     = 15,     -- extra points for ramming a kill
-	WinScore             = 50,     -- flat bonus awarded to winning team/player
-
-	-- Team settings
-	TeamsEnabled         = true,
-	TeamNames            = { "Redline", "Blacktop" },
-	FriendlyFire         = false,
+	-- Match-end conditions
+	ScoreLimit            = 1500, -- first team/player to reach this wins
+	SuddenDeathThreshold  = 30,   -- seconds remaining when overtime triggers if tied
 }
 
--- ──────────────────────────────────────────────
--- Gamepass / Monetisation stubs
--- ──────────────────────────────────────────────
-WorldConfig.Monetisation = {
-	VipGamepassId          = "GAMEPASS_ID_PLACEHOLDER",  -- doubles XP
-	ExtraVehicleGamepassId = "GAMEPASS_ID_PLACEHOLDER",  -- unlocks bonus vehicle
-	RespawnBoostProductId  = "DEVPRODUCT_ID_PLACEHOLDER", -- instant respawn
+-- ─────────────────────────────────────────────
+--  TeamConfig — two rival factions
+-- ─────────────────────────────────────────────
+WorldConfig.TeamConfig = {
+	{
+		name      = "Redline",
+		color     = BrickColor.new("Bright red"),
+		spawnSide = "positive",  -- uses spawn points with positive X
+	},
+	{
+		name      = "Cobalt",
+		color     = BrickColor.new("Bright blue"),
+		spawnSide = "negative",  -- uses spawn points with negative X
+	},
 }
 
 return WorldConfig

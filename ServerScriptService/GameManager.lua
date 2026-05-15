@@ -1,12 +1,9 @@
--- GameManager.lua
--- Route Rage Terrain — ServerScript for game state & core logic
--- Place in: ServerScriptService
-
-local Players           = game:GetService("Players")
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local DataStoreService  = game:GetService("DataStoreService")
-local RunService        = game:GetService("RunService")
-local Workspace         = game:GetService("Workspace")
+local DataStoreService = game:GetService("DataStoreService")
+local RunService = game:GetService("RunService")
+local CollectionService = game:GetService("CollectionService")
+local UserInputService = game:GetService("UserInputService")
 
 local WorldConfig = require(script.Parent:WaitForChild("WorldConfig"))
 
@@ -31,336 +28,582 @@ local function getOrCreate(name, class)
 	return obj
 end
 
--- One RemoteEvent per core mechanic
-local evTerrainGeneration = getOrCreate("TerrainGeneration", "RemoteEvent")
-local evStarterSuburbs    = getOrCreate("StarterSuburbs",    "RemoteEvent")
-local evRoadNetwork       = getOrCreate("RoadNetwork",       "RemoteEvent")
-local evShortcuts         = getOrCreate("Shortcuts",         "RemoteEvent")
-
--- ── Game state ───────────────────────────────────────────────────────────────
-local State = {
-	phase            = "Waiting",   -- Waiting | Generating | Active
-	playerData       = {},          -- [userId] = { coins, shortcuts, completedRoads }
-	generatedChunks  = {},          -- tracks which terrain chunks are active
-	roadNodes        = {},          -- list of road node CFrames
-	shortcutNodes    = {},          -- list of unlocked shortcut positions
-	suburbRegions    = {},          -- suburb zone data
-}
+-- One remote per mechanic
+local reBikeSpawner       = getOrCreate("BikeSpawner",       "RemoteEvent")
+local reVehicleMount      = getOrCreate("VehicleMount",      "RemoteEvent")
+local reDeliverySystem    = getOrCreate("DeliverySystem",    "RemoteEvent")
+local reThrowMechanic     = getOrCreate("ThrowMechanic",     "RemoteEvent")
+local reProximityDelivery = getOrCreate("ProximityDelivery", "RemoteEvent")
+local reMobileControls    = getOrCreate("MobileControls",    "RemoteEvent")
+local reComboScoring      = getOrCreate("ComboScoring",      "RemoteEvent")
+local reDeviceDetection   = getOrCreate("DeviceDetection",   "RemoteEvent")
+local reHudUpdate         = getOrCreate("HudUpdate",         "RemoteEvent")
 
 -- ── Default player data template ─────────────────────────────────────────────
 local function defaultData()
 	return {
-		coins          = 0,
-		shortcuts      = {},   -- list of shortcut IDs unlocked
-		completedRoads = 0,
-		lastArea       = WorldConfig.DefaultArea or "Suburbs",
+		totalDeliveries = 0,
+		totalScore      = 0,
+		highestCombo    = 0,
+		coins           = 0,
+		bikeSkin        = "Default",
 	}
 end
 
--- ── DataStore helpers ─────────────────────────────────────────────────────────
-local function loadPlayerData(player)
-	local userId = player.UserId
+-- ── Game State ────────────────────────────────────────────────────────────────
+local playerData   = {}   -- [userId] = data table
+local playerStates = {}   -- [userId] = runtime state (bike, cargo, combo, etc.)
+
+local DELIVERY_RADIUS     = 10   -- studs for proximity delivery
+local COMBO_RESET_TIME    = 8    -- seconds before combo resets
+local BIKE_RESPAWN_DELAY  = 5    -- seconds before a new bike can be spawned
+local MAX_COMBO           = 20   -- cap combo multiplier display
+local DELIVERY_BASE_SCORE = 100  -- base points per delivery
+
+-- ── Spawn helpers ─────────────────────────────────────────────────────────────
+local function getDefaultSpawn()
+	-- WorldConfig.DefaultArea should expose a SpawnPoints list
+	local area = WorldConfig.DefaultArea
+	if area and area.SpawnPoints and #area.SpawnPoints > 0 then
+		return area.SpawnPoints[math.random(#area.SpawnPoints)]
+	end
+	return Vector3.new(0, 5, 0)
+end
+
+local function spawnPlayerAtDefault(player)
+	local char = player.Character
+	if not char then return end
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if root then
+		root.CFrame = CFrame.new(getDefaultSpawn())
+	end
+end
+
+-- ── Data persistence ──────────────────────────────────────────────────────────
+local function loadData(player)
+	local uid = player.UserId
 	local success, result = pcall(function()
-		return gameDataStore:GetAsync(tostring(userId))
+		return gameDataStore:GetAsync("player_" .. uid)
 	end)
 	if success and result then
-		State.playerData[userId] = result
+		-- Merge saved data onto default to handle missing keys from updates
+		local data = defaultData()
+		for k, v in pairs(result) do
+			data[k] = v
+		end
+		playerData[uid] = data
 	else
 		if not success then
 			warn("[GameManager] Failed to load data for", player.Name, ":", result)
 		end
-		State.playerData[userId] = defaultData()
+		playerData[uid] = defaultData()
 	end
 end
 
-local function savePlayerData(player)
-	local userId = player.UserId
-	local data   = State.playerData[userId]
+local function saveData(player)
+	local uid = player.UserId
+	local data = playerData[uid]
 	if not data then return end
 	local success, err = pcall(function()
-		gameDataStore:SetAsync(tostring(userId), data)
+		gameDataStore:SetAsync("player_" .. uid, data)
 	end)
 	if not success then
 		warn("[GameManager] Failed to save data for", player.Name, ":", err)
 	end
 end
 
--- ── Terrain generation ───────────────────────────────────────────────────────
--- Procedurally fills terrain chunks using Workspace.Terrain:FillBlock
-local CHUNK_SIZE  = WorldConfig.ChunkSize  or 128
-local CHUNK_COUNT = WorldConfig.ChunkCount or 9   -- 3x3 grid of chunks
-
-local function generateTerrainChunk(chunkX, chunkZ)
-	local chunkKey = chunkX .. "_" .. chunkZ
-	if State.generatedChunks[chunkKey] then return end  -- already generated
-	State.generatedChunks[chunkKey] = true
-
-	local terrain = Workspace.Terrain
-	local baseY   = WorldConfig.TerrainBaseY or 0
-	local size    = Vector3.new(CHUNK_SIZE, 4, CHUNK_SIZE)
-	local origin  = CFrame.new(
-		chunkX * CHUNK_SIZE,
-		baseY,
-		chunkZ * CHUNK_SIZE
-	)
-
-	-- Fill ground layer with Grass material
-	terrain:FillBlock(origin, size, Enum.Material.Grass)
-
-	-- Notify clients a new chunk was generated
-	evTerrainGeneration:FireAllClients({ chunkX = chunkX, chunkZ = chunkZ, size = CHUNK_SIZE })
+-- ── Runtime state helpers ─────────────────────────────────────────────────────
+local function initPlayerState(player)
+	playerStates[player.UserId] = {
+		bike             = nil,       -- current bike model reference
+		hasCargo         = false,     -- carrying a delivery package
+		cargoDestination = nil,       -- current delivery target (Part)
+		combo            = 0,         -- current combo count
+		comboTimer       = 0,         -- last delivery timestamp for combo window
+		isMobile         = false,     -- detected device type
+		lastBikeSpawn    = -math.huge, -- tick() of last bike spawn
+		mountedSeat      = nil,       -- VehicleSeat reference
+	}
 end
 
-local function generateWorld()
-	local half = math.floor(math.sqrt(CHUNK_COUNT) / 2)
-	for cx = -half, half do
-		for cz = -half, half do
-			generateTerrainChunk(cx, cz)
+local function getState(player)
+	return playerStates[player.UserId]
+end
+
+-- ── Device Detection ──────────────────────────────────────────────────────────
+-- Client fires back after detecting; server stores it for logic branching
+reDeviceDetection.OnServerEvent:Connect(function(player, isMobile)
+	local st = getState(player)
+	if st then
+		st.isMobile = isMobile == true
+		-- Optionally send mobile UI activation back to client
+		if st.isMobile then
+			reMobileControls:FireClient(player, "ShowMobileUI", true)
 		end
 	end
-end
+end)
 
--- ── Suburb generation ────────────────────────────────────────────────────────
--- Places suburb building pads inside designated suburb zones from WorldConfig
-local function buildStarterSuburbs()
-	State.suburbRegions = {}
-	local zones = WorldConfig.SuburbZones or {}
+-- ── Bike Spawner ──────────────────────────────────────────────────────────────
+local function spawnBikeForPlayer(player)
+	local st = getState(player)
+	if not st then return end
 
-	for i, zone in ipairs(zones) do
-		-- Place a flat concrete base for each suburb lot
-		local lotSize = Vector3.new(zone.width or 20, 2, zone.depth or 20)
-		local origin  = CFrame.new(zone.position or Vector3.new(0, 1, 0))
-		Workspace.Terrain:FillBlock(origin, lotSize, Enum.Material.Concrete)
-
-		-- Optionally spawn a building model if configured
-		local buildingModel = WorldConfig.SuburbBuilding
-		if buildingModel then
-			local clone = buildingModel:Clone()
-			clone:PivotTo(origin * CFrame.new(0, lotSize.Y / 2, 0))
-			clone.Parent = Workspace
-		end
-
-		table.insert(State.suburbRegions, {
-			id       = i,
-			position = zone.position or Vector3.new(0, 0, 0),
-			name     = zone.name or ("Suburb_" .. i),
-		})
+	local now = tick()
+	if now - st.lastBikeSpawn < BIKE_RESPAWN_DELAY then
+		local remaining = math.ceil(BIKE_RESPAWN_DELAY - (now - st.lastBikeSpawn))
+		reBikeSpawner:FireClient(player, "Cooldown", remaining)
+		return
 	end
 
-	-- Broadcast suburb data to all clients
-	evStarterSuburbs:FireAllClients(State.suburbRegions)
-end
-
--- ── Road network generation ──────────────────────────────────────────────────
--- Creates road nodes along a grid and marks them with invisible Parts
-local ROAD_WIDTH  = WorldConfig.RoadWidth  or 8
-local ROAD_GRID   = WorldConfig.RoadGrid   or 4   -- intersections per side
-
-local function buildRoadNetwork()
-	State.roadNodes = {}
-	local spacing = CHUNK_SIZE / ROAD_GRID
-	local roadFolder = Workspace:FindFirstChild("RoadNetwork")
-	if not roadFolder then
-		roadFolder = Instance.new("Folder")
-		roadFolder.Name = "RoadNetwork"
-		roadFolder.Parent = Workspace
+	-- Remove old bike if it exists and is still in workspace
+	if st.bike and st.bike.Parent then
+		st.bike:Destroy()
+		st.bike = nil
 	end
 
-	for i = 0, ROAD_GRID do
-		for j = 0, ROAD_GRID do
-			local worldX = (i - ROAD_GRID / 2) * spacing
-			local worldZ = (j - ROAD_GRID / 2) * spacing
-			local nodePos = Vector3.new(worldX, (WorldConfig.TerrainBaseY or 0) + 2, worldZ)
+	-- Attempt to clone a bike template from WorldConfig or workspace
+	local bikeTemplate = WorldConfig.BikeTemplate
+		or ReplicatedStorage:FindFirstChild("BikeModel")
+		or workspace:FindFirstChild("BikeModel")
 
-			-- Lay a road segment using Terrain (smooth asphalt strip along X)
-			Workspace.Terrain:FillBlock(
-				CFrame.new(nodePos),
-				Vector3.new(spacing, 0.5, ROAD_WIDTH),
-				Enum.Material.SmoothPlastic
-			)
-			-- Lay perpendicular strip along Z
-			Workspace.Terrain:FillBlock(
-				CFrame.new(nodePos),
-				Vector3.new(ROAD_WIDTH, 0.5, spacing),
-				Enum.Material.SmoothPlastic
-			)
+	if not bikeTemplate then
+		warn("[GameManager] No BikeModel found for spawning.")
+		return
+	end
 
-			table.insert(State.roadNodes, nodePos)
+	local char = player.Character
+	if not char then return end
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+
+	local bike = bikeTemplate:Clone()
+	-- Position bike slightly in front of the player
+	bike:SetPrimaryPartCFrame(root.CFrame * CFrame.new(0, 0, -5))
+	bike.Name = "Bike_" .. player.UserId
+	CollectionService:AddTag(bike, "PlayerBike")
+	bike.Parent = workspace
+
+	st.bike = bike
+	st.lastBikeSpawn = now
+
+	reBikeSpawner:FireClient(player, "Spawned", bike)
+end
+
+reBikeSpawner.OnServerEvent:Connect(function(player, action)
+	if action == "RequestSpawn" then
+		spawnBikeForPlayer(player)
+	elseif action == "Despawn" then
+		local st = getState(player)
+		if st and st.bike and st.bike.Parent then
+			st.bike:Destroy()
+			st.bike = nil
 		end
 	end
+end)
 
-	-- Send road node positions to clients for minimap / UI
-	evRoadNetwork:FireAllClients(State.roadNodes)
+-- ── Vehicle Mount ─────────────────────────────────────────────────────────────
+local function mountPlayerToBike(player)
+	local st = getState(player)
+	if not st or not st.bike then
+		reVehicleMount:FireClient(player, "NoVehicle")
+		return
+	end
+
+	local seat = st.bike:FindFirstChildOfClass("VehicleSeat")
+		or st.bike:FindFirstChild("DriveSeat")
+	if not seat then
+		warn("[GameManager] Bike has no VehicleSeat for", player.Name)
+		return
+	end
+
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hum then return end
+
+	seat:Sit(hum)
+	st.mountedSeat = seat
+	reVehicleMount:FireClient(player, "Mounted", seat)
 end
 
--- ── Shortcuts ────────────────────────────────────────────────────────────────
--- Registers shortcut paths between non-adjacent road nodes
-local function registerShortcuts()
-	State.shortcutNodes = {}
-	local shortcuts = WorldConfig.Shortcuts or {}
+local function unmountPlayer(player)
+	local st = getState(player)
+	if not st then return end
+	st.mountedSeat = nil
+	reVehicleMount:FireClient(player, "Dismounted")
+end
 
-	for i, sc in ipairs(shortcuts) do
-		local entry = {
-			id      = i,
-			label   = sc.label or ("Shortcut_" .. i),
-			from    = sc.from,    -- Vector3
-			to      = sc.to,      -- Vector3
-			locked  = sc.locked ~= false,  -- default locked
-		}
-		table.insert(State.shortcutNodes, entry)
+reVehicleMount.OnServerEvent:Connect(function(player, action)
+	if action == "Mount" then
+		mountPlayerToBike(player)
+	elseif action == "Dismount" then
+		unmountPlayer(player)
+	end
+end)
 
-		-- Place a visible trigger Part at shortcut entry point
-		local trigger = Instance.new("Part")
-		trigger.Name        = "Shortcut_" .. i
-		trigger.Size        = Vector3.new(6, 4, 6)
-		trigger.CFrame      = CFrame.new(sc.from or Vector3.new(0, 2, 0))
-		trigger.Anchored    = true
-		trigger.CanCollide  = false
-		trigger.Transparency = 0.6
-		trigger.BrickColor  = BrickColor.new("Bright yellow")
-		trigger.Parent      = Workspace
+-- ── Delivery System ───────────────────────────────────────────────────────────
+local deliveryDestinations = {} -- list of active delivery Parts in workspace
 
-		-- Touched event: unlock shortcut for the touching player
-		trigger.Touched:Connect(function(hit)
-			local char = hit.Parent
-			local player = Players:GetPlayerFromCharacter(char)
-			if not player then return end
-
-			local data = State.playerData[player.UserId]
-			if not data then return end
-
-			-- Check if player has already unlocked this shortcut
-			local alreadyUnlocked = false
-			for _, id in ipairs(data.shortcuts) do
-				if id == i then alreadyUnlocked = true break end
+local function refreshDeliveryDestinations()
+	deliveryDestinations = {}
+	-- Tag delivery zones in workspace with "DeliveryZone" CollectionService tag
+	for _, part in ipairs(CollectionService:GetTagged("DeliveryZone")) do
+		table.insert(deliveryDestinations, part)
+	end
+	-- Fallback: use WorldConfig delivery zones if defined
+	if #deliveryDestinations == 0 and WorldConfig.DeliveryZones then
+		for _, z in ipairs(WorldConfig.DeliveryZones) do
+			if typeof(z) == "Instance" then
+				table.insert(deliveryDestinations, z)
 			end
+		end
+	end
+end
 
-			if not alreadyUnlocked then
-				table.insert(data.shortcuts, i)
-				entry.locked = false
-				-- Notify the touching player of their newly unlocked shortcut
-				evShortcuts:FireClient(player, { action = "Unlocked", shortcut = entry })
+local function assignDelivery(player)
+	refreshDeliveryDestinations()
+	if #deliveryDestinations == 0 then
+		reDeliverySystem:FireClient(player, "NoZonesAvailable")
+		return
+	end
+
+	local st = getState(player)
+	if not st then return end
+
+	-- Pick a random destination
+	local dest = deliveryDestinations[math.random(#deliveryDestinations)]
+	st.hasCargo         = true
+	st.cargoDestination = dest
+
+	reDeliverySystem:FireClient(player, "PickedUp", dest.Position)
+end
+
+reDeliverySystem.OnServerEvent:Connect(function(player, action)
+	if action == "PickupCargo" then
+		local st = getState(player)
+		if st and not st.hasCargo then
+			assignDelivery(player)
+		else
+			reDeliverySystem:FireClient(player, "AlreadyCarrying")
+		end
+	elseif action == "DropCargo" then
+		local st = getState(player)
+		if st then
+			st.hasCargo = false
+			st.cargoDestination = nil
+			-- Dropping resets combo
+			st.combo = 0
+			reDeliverySystem:FireClient(player, "Dropped")
+			reComboScoring:FireClient(player, "ComboReset", 0)
+		end
+	end
+end)
+
+-- ── Throw Mechanic ────────────────────────────────────────────────────────────
+-- Player can throw their cargo to a nearby delivery zone
+reThrowMechanic.OnServerEvent:Connect(function(player, action, throwVector)
+	if action == "Throw" then
+		local st = getState(player)
+		if not st or not st.hasCargo then
+			reThrowMechanic:FireClient(player, "NoCargo")
+			return
+		end
+
+		local char = player.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		if not root then return end
+
+		-- Spawn a throwable part representing the package
+		local pkg = Instance.new("Part")
+		pkg.Name    = "Package_" .. player.UserId
+		pkg.Size    = Vector3.new(1.5, 1.5, 1.5)
+		pkg.BrickColor = BrickColor.new("Bright yellow")
+		pkg.CFrame  = root.CFrame * CFrame.new(0, 1, -2)
+		pkg.Parent  = workspace
+
+		-- Apply throw velocity
+		local bv = Instance.new("BodyVelocity")
+		bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+		bv.Velocity = (typeof(throwVector) == "Vector3" and throwVector or root.CFrame.LookVector * 40 + Vector3.new(0, 15, 0))
+		bv.Parent   = pkg
+
+		-- Tag package for proximity detection
+		CollectionService:AddTag(pkg, "ThrownPackage")
+		pkg:SetAttribute("OwnerId", player.UserId)
+
+		st.hasCargo = false
+		st.cargoDestination = nil
+		reThrowMechanic:FireClient(player, "Thrown", pkg)
+
+		-- Remove velocity after brief flight, then check landing
+		task.delay(0.3, function()
+			if pkg and pkg.Parent then
+				bv:Destroy()
+			end
+		end)
+
+		-- Auto-remove package after 10 seconds if not delivered
+		task.delay(10, function()
+			if pkg and pkg.Parent then
+				pkg:Destroy()
 			end
 		end)
 	end
+end)
 
-	-- Broadcast all shortcut metadata to clients
-	evShortcuts:FireAllClients({ action = "Register", shortcuts = State.shortcutNodes })
+-- ── Combo Scoring ─────────────────────────────────────────────────────────────
+local function awardDeliveryScore(player, isThrow)
+	local st = getState(player)
+	local data = playerData[player.UserId]
+	if not st or not data then return end
+
+	local now = tick()
+	-- Check if within combo window
+	if now - st.comboTimer <= COMBO_RESET_TIME then
+		st.combo = math.min(st.combo + 1, MAX_COMBO)
+	else
+		st.combo = 1
+	end
+	st.comboTimer = now
+
+	local multiplier = st.combo
+	local bonus      = isThrow and 1.5 or 1   -- throw deliveries score bonus
+	local score      = math.floor(DELIVERY_BASE_SCORE * multiplier * bonus)
+
+	data.totalScore      = data.totalScore + score
+	data.totalDeliveries = data.totalDeliveries + 1
+	data.coins           = data.coins + math.floor(score / 10)
+
+	if st.combo > data.highestCombo then
+		data.highestCombo = st.combo
+	end
+
+	reComboScoring:FireClient(player, "ComboUpdate", st.combo, score)
+	reHudUpdate:FireClient(player, {
+		score      = data.totalScore,
+		deliveries = data.totalDeliveries,
+		combo      = st.combo,
+		coins      = data.coins,
+	})
 end
 
--- ── Spawn helper ─────────────────────────────────────────────────────────────
-local function spawnAtDefaultArea(player)
-	local areaName = WorldConfig.DefaultArea or "Suburbs"
-	local spawnPos = WorldConfig.AreaSpawns and WorldConfig.AreaSpawns[areaName]
-	if not spawnPos then
-		spawnPos = Vector3.new(0, 10, 0)  -- absolute fallback
-	end
-	local char = player.Character
-	if char then
-		local root = char:FindFirstChild("HumanoidRootPart")
-		if root then
-			root.CFrame = CFrame.new(spawnPos)
+-- ── Proximity Delivery ────────────────────────────────────────────────────────
+-- Poll: check if player with cargo is near their destination each heartbeat tick
+local proximityThrottle = 0
+RunService.Heartbeat:Connect(function(dt)
+	proximityThrottle = proximityThrottle + dt
+	if proximityThrottle < 0.5 then return end  -- check every 0.5s to reduce load
+	proximityThrottle = 0
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		local st = getState(player)
+		if not st or not st.hasCargo or not st.cargoDestination then continue end
+
+		local char = player.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		if not root then continue end
+
+		local dest = st.cargoDestination
+		if not dest or not dest.Parent then
+			-- Destination removed; reset
+			st.hasCargo = false
+			st.cargoDestination = nil
+			continue
+		end
+
+		local dist = (root.Position - dest.Position).Magnitude
+		if dist <= DELIVERY_RADIUS then
+			-- Successful proximity delivery
+			st.hasCargo = false
+			st.cargoDestination = nil
+			reProximityDelivery:FireClient(player, "Delivered", dest.Position)
+			awardDeliveryScore(player, false)
 		end
 	end
-end
 
--- ── Player lifecycle ─────────────────────────────────────────────────────────
+	-- Check thrown packages proximity to delivery zones
+	for _, pkg in ipairs(CollectionService:GetTagged("ThrownPackage")) do
+		if not pkg.Parent then continue end
+		local ownerId = pkg:GetAttribute("OwnerId")
+		local owner   = Players:GetPlayerByUserId(ownerId)
+
+		for _, zone in ipairs(deliveryDestinations) do
+			if not zone.Parent then continue end
+			local dist = (pkg.Position - zone.Position).Magnitude
+			if dist <= DELIVERY_RADIUS then
+				pkg:Destroy()
+				if owner then
+					local st = getState(owner)
+					if st then
+						reProximityDelivery:FireClient(owner, "ThrowDelivered", zone.Position)
+						awardDeliveryScore(owner, true)
+					end
+				end
+				break
+			end
+		end
+	end
+end)
+
+-- ── Mobile Controls ───────────────────────────────────────────────────────────
+-- Client fires mobile button presses; server translates to game actions
+reMobileControls.OnServerEvent:Connect(function(player, action, ...)
+	if action == "SpawnBike" then
+		spawnBikeForPlayer(player)
+	elseif action == "Mount" then
+		mountPlayerToBike(player)
+	elseif action == "Dismount" then
+		unmountPlayer(player)
+	elseif action == "Pickup" then
+		local st = getState(player)
+		if st and not st.hasCargo then
+			assignDelivery(player)
+		end
+	elseif action == "Throw" then
+		local throwVec = ...
+		reThrowMechanic:FireServer(player, "Throw", throwVec)  -- re-route to throw handler
+		-- Direct handling:
+		local st = getState(player)
+		if st and st.hasCargo then
+			local char = player.Character
+			local root = char and char:FindFirstChild("HumanoidRootPart")
+			if root then
+				local pkg = Instance.new("Part")
+				pkg.Name    = "Package_" .. player.UserId
+				pkg.Size    = Vector3.new(1.5, 1.5, 1.5)
+				pkg.BrickColor = BrickColor.new("Bright yellow")
+				pkg.CFrame  = root.CFrame * CFrame.new(0, 1, -2)
+				pkg.Parent  = workspace
+				local bv = Instance.new("BodyVelocity")
+				bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+				bv.Velocity = root.CFrame.LookVector * 40 + Vector3.new(0, 15, 0)
+				bv.Parent   = pkg
+				CollectionService:AddTag(pkg, "ThrownPackage")
+				pkg:SetAttribute("OwnerId", player.UserId)
+				st.hasCargo = false
+				st.cargoDestination = nil
+				reThrowMechanic:FireClient(player, "Thrown", pkg)
+				task.delay(0.3, function() if pkg and pkg.Parent then bv:Destroy() end end)
+				task.delay(10,  function() if pkg and pkg.Parent then pkg:Destroy() end end)
+			end
+		end
+	end
+end)
+
+-- ── Player lifecycle ──────────────────────────────────────────────────────────
 Players.PlayerAdded:Connect(function(player)
-	-- Load persisted data first
-	loadPlayerData(player)
+	loadData(player)
+	initPlayerState(player)
 
 	player.CharacterAdded:Connect(function(char)
-		-- Small delay ensures HumanoidRootPart is ready
-		task.defer(function()
-			spawnAtDefaultArea(player)
-		end)
+		-- Small delay so character fully loads before teleporting
+		task.wait(0.1)
+		spawnPlayerAtDefault(player)
 
-		-- Track deaths for road-rage scoring
+		-- Detect device: fire to client, client responds via DeviceDetection remote
+		reDeviceDetection:FireClient(player, "DetectDevice")
+
+		-- Push initial HUD data
+		local data = playerData[player.UserId]
+		if data then
+			reHudUpdate:FireClient(player, {
+				score      = data.totalScore,
+				deliveries = data.totalDeliveries,
+				combo      = 0,
+				coins      = data.coins,
+			})
+		end
+
+		-- Track Humanoid death for respawn
 		local humanoid = char:WaitForChild("Humanoid")
 		humanoid.Died:Connect(function()
-			local data = State.playerData[player.UserId]
-			if data then
-				data.coins = math.max(0, (data.coins or 0) - 5)  -- penalty on death
+			-- Drop cargo on death
+			local st = getState(player)
+			if st then
+				st.hasCargo = false
+				st.cargoDestination = nil
+				st.combo = 0
+				st.mountedSeat = nil
+				reComboScoring:FireClient(player, "ComboReset", 0)
 			end
+			task.delay(3, function()
+				if player and player.Parent then
+					player:LoadCharacter()
+				end
+			end)
 		end)
 	end)
-
-	-- Send current world state to the joining player
-	evTerrainGeneration:FireClient(player, { chunks = State.generatedChunks })
-	evStarterSuburbs:FireClient(player, State.suburbRegions)
-	evRoadNetwork:FireClient(player, State.roadNodes)
-	evShortcuts:FireClient(player, { action = "Register", shortcuts = State.shortcutNodes })
 end)
 
 Players.PlayerRemoving:Connect(function(player)
-	savePlayerData(player)
-	State.playerData[player.UserId] = nil
+	saveData(player)
+	-- Clean up bike
+	local st = getState(player)
+	if st and st.bike and st.bike.Parent then
+		st.bike:Destroy()
+	end
+	playerStates[player.UserId] = nil
+	playerData[player.UserId]   = nil
 end)
 
--- Save all online players when server closes
+-- Save all player data on server close
 game:BindToClose(function()
 	for _, player in ipairs(Players:GetPlayers()) do
-		savePlayerData(player)
+		saveData(player)
 	end
 end)
 
--- ── World initialisation ─────────────────────────────────────────────────────
-local function initWorld()
-	State.phase = "Generating"
-	generateWorld()
-	buildStarterSuburbs()
-	buildRoadNetwork()
-	registerShortcuts()
-	State.phase = "Active"
-	print("[GameManager] Route Rage world ready.")
-end
-
-task.spawn(initWorld)
-
--- ── Public API (module table) ─────────────────────────────────────────────────
+-- ── Public API (GameManager module table) ────────────────────────────────────
 local GameManager = {}
 
--- Returns a copy of the player's current data
 function GameManager.GetPlayerData(player)
-	return State.playerData[player.UserId]
+	return playerData[player.UserId]
 end
 
--- Award coins to a player (e.g. completing a road segment)
-function GameManager.AwardCoins(player, amount)
-	local data = State.playerData[player.UserId]
-	if not data then return end
-	data.coins = (data.coins or 0) + amount
+function GameManager.GetPlayerState(player)
+	return playerStates[player.UserId]
 end
 
--- Forcefully unlock a shortcut for a player by shortcut id
-function GameManager.UnlockShortcut(player, shortcutId)
-	local data = State.playerData[player.UserId]
-	if not data then return end
-	for _, id in ipairs(data.shortcuts) do
-		if id == shortcutId then return end  -- already unlocked
+function GameManager.SpawnBike(player)
+	spawnBikeForPlayer(player)
+end
+
+function GameManager.MountPlayer(player)
+	mountPlayerToBike(player)
+end
+
+function GameManager.UnmountPlayer(player)
+	unmountPlayer(player)
+end
+
+function GameManager.AssignDelivery(player)
+	assignDelivery(player)
+end
+
+function GameManager.AwardScore(player, isThrow)
+	awardDeliveryScore(player, isThrow)
+end
+
+function GameManager.GetLeaderboard()
+	local list = {}
+	for uid, data in pairs(playerData) do
+		local player = Players:GetPlayerByUserId(uid)
+		table.insert(list, {
+			name        = player and player.Name or tostring(uid),
+			totalScore  = data.totalScore,
+			deliveries  = data.totalDeliveries,
+			highestCombo= data.highestCombo,
+		})
 	end
-	table.insert(data.shortcuts, shortcutId)
-	local entry = State.shortcutNodes[shortcutId]
-	if entry then
-		evShortcuts:FireClient(player, { action = "Unlocked", shortcut = entry })
+	table.sort(list, function(a, b) return a.totalScore > b.totalScore end)
+	return list
+end
+
+function GameManager.AddCoins(player, amount)
+	local data = playerData[player.UserId]
+	if data then
+		data.coins = data.coins + amount
+		reHudUpdate:FireClient(player, { coins = data.coins })
 	end
-end
-
--- Regenerates a specific terrain chunk (e.g. after destruction)
-function GameManager.RegenerateChunk(chunkX, chunkZ)
-	local key = chunkX .. "_" .. chunkZ
-	State.generatedChunks[key] = nil  -- mark as needing regen
-	generateTerrainChunk(chunkX, chunkZ)
-end
-
--- Returns all current road node positions
-function GameManager.GetRoadNodes()
-	return State.roadNodes
-end
-
--- Returns current game phase
-function GameManager.GetPhase()
-	return State.phase
 end
 
 return GameManager
