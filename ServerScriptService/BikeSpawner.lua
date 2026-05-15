@@ -61,6 +61,15 @@ local function loadBikeModel()
 	return nil
 end
 
+-- Strip Sound objects and Animation instances (with AnimationId) loaded from the asset
+local function sanitizeModel(model)
+	for _, desc in ipairs(model:GetDescendants()) do
+		if desc:IsA("Sound") or desc:IsA("Animation") then
+			desc:Destroy()
+		end
+	end
+end
+
 -- Weld a part to a primary part using a WeldConstraint
 local function weldToPrimary(primaryPart, part)
 	local weld = Instance.new("WeldConstraint")
@@ -205,6 +214,8 @@ local function spawnBike(position)
 		warn("[BikeSpawner] Could not load any bike model for position " .. tostring(position))
 		return nil
 	end
+
+	sanitizeModel(model)
 
 	-- Ensure model has a PrimaryPart before parenting
 	if not model.PrimaryPart then
