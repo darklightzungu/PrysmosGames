@@ -89,10 +89,10 @@ local function buildSpawnPads()
         local pad = makePart(
             "SpawnPad_" .. i,
             Vector3.new(6, 0.5, 6),
-            CFrame.new(spawnPos + Vector3.new(0, 1.25, 0)) * CFrame.Angles(0, math.rad(180), 0),
+            CFrame.new(spawnPos + Vector3.new(0, 1.25, 0)),  -- rest on road surface
             Color3.fromRGB(0, 162, 255),
             Enum.Material.Neon,
-            true,
+            false,   -- visual only — must not block bikes or players
             spawnPadsFolder
         )
 
