@@ -1,25 +1,27 @@
-local Players = game:GetService("Players")
+local Players          = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
+local RunService       = game:GetService("RunService")
 
-local player = Players.LocalPlayer
+local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
-local camera = workspace.CurrentCamera
+local camera    = workspace.CurrentCamera
 
--- Device detection
 local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 
 -- Remote references
-local remotes = ReplicatedStorage:WaitForChild("Remotes")
-local pickupItemRemote = remotes:WaitForChild("PickupItem")
-local throwItemRemote = remotes:WaitForChild("ThrowItem")
+local remotes               = ReplicatedStorage:WaitForChild("Remotes")
+local pickupItemRemote      = remotes:WaitForChild("PickupItem")
+local throwItemRemote       = remotes:WaitForChild("ThrowItem")
 local pickupConfirmedRemote = remotes:WaitForChild("PickupConfirmed")
 local deliverySuccessRemote = remotes:WaitForChild("DeliverySuccess")
 
 -- Held item state
-local heldItemName = nil
+local heldItemName  = nil
 local heldItemCount = 0
+local heldItemType  = nil   -- server-recognised key: "newspaper" | "flyer" | "package"
+
+local THROW_SPEED = 60
 
 -- Compute throw direction based on offset string relative to camera
 local function getThrowDirection(offset)
@@ -33,7 +35,6 @@ local function getThrowDirection(offset)
 	return cf.LookVector
 end
 
--- Whether the player is currently holding an item (used for left-click throw)
 local function isHoldingItem()
 	return heldItemName ~= nil and heldItemCount > 0
 end
@@ -42,38 +43,35 @@ end
 -- ITEM INDICATOR (all devices)
 ------------------------------------------------------------------------
 local indicatorGui = Instance.new("ScreenGui")
-indicatorGui.Name = "ItemIndicatorGui"
-indicatorGui.ResetOnSpawn = false
-indicatorGui.DisplayOrder = 10
-indicatorGui.IgnoreGuiInset = false
-indicatorGui.Parent = playerGui
+indicatorGui.Name            = "ItemIndicatorGui"
+indicatorGui.ResetOnSpawn    = false
+indicatorGui.DisplayOrder    = 10
+indicatorGui.IgnoreGuiInset  = false
+indicatorGui.Parent          = playerGui
 
 local indicatorLabel = Instance.new("TextLabel")
-indicatorLabel.Name = "ItemIndicator"
-indicatorLabel.Size = UDim2.new(0, 220, 0, 36)
-indicatorLabel.Position = UDim2.new(0, 12, 0, 12)
-indicatorLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+indicatorLabel.Name                   = "ItemIndicator"
+indicatorLabel.Size                   = UDim2.new(0, 220, 0, 36)
+indicatorLabel.Position               = UDim2.new(0, 12, 0, 12)
+indicatorLabel.BackgroundColor3       = Color3.fromRGB(20, 20, 20)
 indicatorLabel.BackgroundTransparency = 0.35
-indicatorLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-indicatorLabel.Font = Enum.Font.GothamBold
-indicatorLabel.TextSize = 13
-indicatorLabel.Text = "No items — visit DEPOT"
-indicatorLabel.TextXAlignment = Enum.TextXAlignment.Left
-indicatorLabel.TextTruncate = Enum.TextTruncate.AtEnd
-indicatorLabel.BorderSizePixel = 0
-indicatorLabel.Parent = indicatorGui
+indicatorLabel.TextColor3             = Color3.fromRGB(255, 255, 255)
+indicatorLabel.Font                   = Enum.Font.GothamBold
+indicatorLabel.TextSize               = 13
+indicatorLabel.Text                   = "No items — visit DEPOT"
+indicatorLabel.TextXAlignment         = Enum.TextXAlignment.Left
+indicatorLabel.TextTruncate           = Enum.TextTruncate.AtEnd
+indicatorLabel.BorderSizePixel        = 0
+indicatorLabel.Parent                 = indicatorGui
 
--- Rounded corners for the indicator
 local indicatorCorner = Instance.new("UICorner")
 indicatorCorner.CornerRadius = UDim.new(0, 8)
-indicatorCorner.Parent = indicatorLabel
+indicatorCorner.Parent       = indicatorLabel
 
--- Padding inside label
 local indicatorPadding = Instance.new("UIPadding")
 indicatorPadding.PaddingLeft = UDim.new(0, 10)
-indicatorPadding.Parent = indicatorLabel
+indicatorPadding.Parent      = indicatorLabel
 
--- Update the indicator text whenever held item changes
 local function updateIndicator()
 	if heldItemName and heldItemCount > 0 then
 		indicatorLabel.Text = heldItemName .. " x" .. heldItemCount
@@ -82,52 +80,109 @@ local function updateIndicator()
 	end
 end
 
--- Listen for item pickup confirmation from server
+-- Server fires PickupConfirmed when player picks up from depot
 pickupConfirmedRemote.OnClientEvent:Connect(function(itemName, count)
-	heldItemName = itemName
+	heldItemName  = itemName
 	heldItemCount = count or 1
+	heldItemType  = itemName:lower()   -- "Newspaper" → "newspaper"
 	updateIndicator()
 end)
 
--- Listen for successful delivery (clears held item display)
-deliverySuccessRemote.OnClientEvent:Connect(function()
-	heldItemName = nil
-	heldItemCount = 0
-	updateIndicator()
+-- Server fires DeliverySuccess on successful delivery (clears held item)
+deliverySuccessRemote.OnClientEvent:Connect(function(eventType)
+	-- "pickup" events come through DeliverySuccess for legacy reasons;
+	-- only clear item on actual delivery events
+	if eventType ~= "pickup" then
+		heldItemName  = nil
+		heldItemCount = 0
+		heldItemType  = nil
+		updateIndicator()
+	end
+end)
+
+------------------------------------------------------------------------
+-- ARC PREVIEW — 8 yellow neon dots along parabolic throw trajectory
+------------------------------------------------------------------------
+local ARC_DOTS  = 8
+local THROW_UP  = 15
+local GRAVITY   = -196.2
+
+local arcDots = {}
+for i = 1, ARC_DOTS do
+	local dot           = Instance.new("Part")
+	dot.Shape           = Enum.PartType.Ball
+	dot.Size            = Vector3.new(0.25, 0.25, 0.25)
+	dot.Color           = Color3.fromRGB(255, 200, 0)
+	dot.Material        = Enum.Material.Neon
+	dot.Anchored        = true
+	dot.CanCollide      = false
+	dot.CastShadow      = false
+	dot.Transparency    = 1   -- hidden by default
+	dot.Parent          = workspace
+	arcDots[i]          = dot
+end
+
+local function setArcVisible(visible)
+	local transparency = visible and 0.3 or 1
+	for _, d in ipairs(arcDots) do
+		d.Transparency = transparency
+	end
+end
+
+RunService.Heartbeat:Connect(function()
+	local char = player.Character
+	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+	if not hrp or not heldItemType then
+		setArcVisible(false)
+		return
+	end
+	setArcVisible(true)
+
+	local p0  = hrp.Position + Vector3.new(0, 2, 0)
+	local dir = getThrowDirection("forward")
+
+	for i = 1, ARC_DOTS do
+		local t   = (i / ARC_DOTS) * 1.2   -- simulate 1.2 s of flight
+		local pos = p0 + Vector3.new(
+			dir.X * THROW_SPEED * t,
+			THROW_UP * t + 0.5 * GRAVITY * t * t,
+			dir.Z * THROW_SPEED * t
+		)
+		arcDots[i].CFrame = CFrame.new(pos)
+	end
+end)
+
+player.CharacterRemoving:Connect(function()
+	setArcVisible(false)
 end)
 
 ------------------------------------------------------------------------
 -- KEYBOARD BINDINGS (all devices)
 ------------------------------------------------------------------------
 
--- F key: fire PickupItem
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
 
 	if input.KeyCode == Enum.KeyCode.F then
+		-- Attempt F-key pickup (backup for when ProximityPrompt is out of range)
 		pickupItemRemote:FireServer()
 
 	elseif input.KeyCode == Enum.KeyCode.Q then
-		-- Q: throw left — negate camera right vector
-		throwItemRemote:FireServer(-camera.CFrame.RightVector, 60)
-		print("[MobileControls] Throw fired")
+		-- Q: throw left
+		throwItemRemote:FireServer(heldItemType or "newspaper", getThrowDirection("left"), THROW_SPEED)
 
-	elseif input.KeyCode == Enum.KeyCode.R then
-		-- R: throw right — camera right vector
-		throwItemRemote:FireServer(camera.CFrame.RightVector, 60)
-		print("[MobileControls] Throw fired")
+	elseif input.KeyCode == Enum.KeyCode.E then
+		-- E: throw right (only fires when ProximityPrompt is NOT active)
+		throwItemRemote:FireServer(heldItemType or "newspaper", getThrowDirection("right"), THROW_SPEED)
 	end
 end)
 
--- Left click while holding item: ray from camera through mouse position
+-- Left click while holding item: throw forward
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
 	if input.UserInputType == Enum.UserInputType.MouseButton1 then
 		if isHoldingItem() then
-			local mousePos = UserInputService:GetMouseLocation()
-			local ray = camera:ScreenPointToRay(mousePos.X, mousePos.Y)
-			throwItemRemote:FireServer(ray.Direction, 60)
-			print("[MobileControls] Throw fired")
+			throwItemRemote:FireServer(heldItemType or "newspaper", getThrowDirection("forward"), THROW_SPEED)
 		end
 	end
 end)
@@ -138,61 +193,51 @@ end)
 if isMobile then
 
 	local mobileGui = Instance.new("ScreenGui")
-	mobileGui.Name = "MobileControlsGui"
-	mobileGui.ResetOnSpawn = false
-	mobileGui.DisplayOrder = 5
+	mobileGui.Name           = "MobileControlsGui"
+	mobileGui.ResetOnSpawn   = false
+	mobileGui.DisplayOrder   = 5
 	mobileGui.IgnoreGuiInset = true
-	mobileGui.Parent = playerGui
+	mobileGui.Parent         = playerGui
 
-	-- Helper: creates a circular button with label text
 	local function createButton(labelText, position)
-		local btn = Instance.new("TextButton")
-		btn.Size = UDim2.new(0, 80, 0, 80)
-		btn.Position = position
-		btn.AnchorPoint = Vector2.new(0.5, 1) -- anchor bottom-centre for easy bottom placement
-		btn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-		btn.BackgroundTransparency = 0.3
-		btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-		btn.Font = Enum.Font.GothamBold
-		btn.TextSize = 14
-		btn.Text = labelText
-		btn.BorderSizePixel = 0
-		btn.Parent = mobileGui
+		local btn                    = Instance.new("TextButton")
+		btn.Size                     = UDim2.new(0, 80, 0, 80)
+		btn.Position                 = position
+		btn.AnchorPoint              = Vector2.new(0.5, 1)
+		btn.BackgroundColor3         = Color3.fromRGB(30, 30, 30)
+		btn.BackgroundTransparency   = 0.3
+		btn.TextColor3               = Color3.fromRGB(255, 255, 255)
+		btn.Font                     = Enum.Font.GothamBold
+		btn.TextSize                 = 14
+		btn.Text                     = labelText
+		btn.BorderSizePixel          = 0
+		btn.Parent                   = mobileGui
 
-		-- Circular shape
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(1, 0)
-		corner.Parent = btn
+		local corner             = Instance.new("UICorner")
+		corner.CornerRadius      = UDim.new(1, 0)
+		corner.Parent            = btn
 
-		-- Scale down on press, restore on release
-		btn.TouchBegan:Connect(function()
-			btn.Size = UDim2.new(0, 72, 0, 72) -- scale to ~0.9
-		end)
-		btn.TouchEnded:Connect(function()
-			btn.Size = UDim2.new(0, 80, 0, 80)
-		end)
+		btn.TouchBegan:Connect(function() btn.Size = UDim2.new(0, 72, 0, 72) end)
+		btn.TouchEnded:Connect(function()  btn.Size = UDim2.new(0, 80, 0, 80) end)
 
 		return btn
 	end
 
-	-- Button positions (bottom-left cluster + bottom-right pickup)
-	-- Using scale so it adapts to screen size; small offset from edges
-	local throwLeftBtn = createButton("⟵ Left",   UDim2.new(0, 60,  1, -20))
-	local throwRightBtn = createButton("Right ⟶", UDim2.new(0, 155, 1, -20))
-	local throwFwdBtn  = createButton("↑ Fwd",    UDim2.new(0, 107, 1, -110))
-	local pickupBtn    = createButton("Pickup",   UDim2.new(1, -55, 1, -20))
+	local throwLeftBtn  = createButton("⟵ Left",   UDim2.new(0, 60,  1, -20))
+	local throwRightBtn = createButton("Right ⟶",  UDim2.new(0, 155, 1, -20))
+	local throwFwdBtn   = createButton("↑ Fwd",     UDim2.new(0, 107, 1, -110))
+	local pickupBtn     = createButton("Pickup",    UDim2.new(1, -55, 1, -20))
 
-	-- Wire up button actions
 	throwLeftBtn.Activated:Connect(function()
-		throwItemRemote:FireServer(getThrowDirection("left"))
+		throwItemRemote:FireServer(heldItemType or "newspaper", getThrowDirection("left"), THROW_SPEED)
 	end)
 
 	throwRightBtn.Activated:Connect(function()
-		throwItemRemote:FireServer(getThrowDirection("right"))
+		throwItemRemote:FireServer(heldItemType or "newspaper", getThrowDirection("right"), THROW_SPEED)
 	end)
 
 	throwFwdBtn.Activated:Connect(function()
-		throwItemRemote:FireServer(getThrowDirection("forward"))
+		throwItemRemote:FireServer(heldItemType or "newspaper", getThrowDirection("forward"), THROW_SPEED)
 	end)
 
 	pickupBtn.Activated:Connect(function()
