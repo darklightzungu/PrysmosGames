@@ -43,8 +43,8 @@ end
 
 -- Step 5: Dirt shortcut zones between road blocks (encourage off-road play)
 local function buildYards()
-	terrain:FillBlock(CFrame.new(60, -2, 40),   Vector3.new(90, 2, 60), Enum.Material.Dirt)
-	terrain:FillBlock(CFrame.new(-60, -2, -40), Vector3.new(90, 2, 60), Enum.Material.Dirt)
+	terrain:FillBlock(CFrame.new(60, -2, 40),   Vector3.new(90, 2, 60), Enum.Material.Ground)
+	terrain:FillBlock(CFrame.new(-60, -2, -40), Vector3.new(90, 2, 60), Enum.Material.Ground)
 end
 
 -- Step 6: Raised grass hills along map boundaries to wall off the playable area
