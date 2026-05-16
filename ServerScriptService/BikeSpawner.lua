@@ -3,7 +3,7 @@ local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players           = game:GetService("Players")
 
-local BIKE_ASSET_ID = 10416886834
+local BIKE_ASSET_ID = 15447790720
 
 local SPAWN_POSITIONS = {
 	Vector3.new( 12, 4,  20),
