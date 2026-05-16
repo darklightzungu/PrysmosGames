@@ -59,7 +59,8 @@ indicatorPadding.Parent = indicatorLabel
 
 local function updateIndicator()
 	if heldItemName and heldItemCount > 0 then
-		indicatorLabel.Text = heldItemName .. " x" .. heldItemCount .. "  |  F to throw"
+		local display = heldItemName:sub(1,1):upper() .. heldItemName:sub(2)
+		indicatorLabel.Text = display .. " x" .. heldItemCount .. "  |  F to throw"
 	else
 		indicatorLabel.Text = "No items — visit DEPOT (E)"
 	end

@@ -185,7 +185,7 @@ depotPrompt.Triggered:Connect(function(player)
 	cycleIndex              = (cycleIndex % #itemCycle) + 1
 	local assignedType      = itemCycle[cycleIndex]
 	playerInventory[player] = assignedType
-	pickupConfirmedRemote:FireClient(player, ITEM_TYPES[assignedType].label, 1)
+	pickupConfirmedRemote:FireClient(player, assignedType, 1)
 end)
 
 -- ============================================================
