@@ -1,502 +1,275 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
 
 local player = Players.LocalPlayer
 local playerGui = player.PlayerGui
 
--- Wait for Remotes folder
+-- Wait for remotes folder
 local remotes = ReplicatedStorage:WaitForChild("Remotes")
 
--- Remote events for combat
+-- Remote events
 local updateHealthEvent = remotes:WaitForChild("UpdateHealth")
-local updateStatsEvent = remotes:WaitForChild("UpdateStats")
-local combatFeedbackEvent = remotes:WaitForChild("CombatFeedback")
-local actionCooldownEvent = remotes:WaitForChild("ActionCooldown")
+local updateStatsEvent  = remotes:WaitForChild("UpdateStats")
+local updatePvpEvent    = remotes:WaitForChild("UpdatePvpStatus")
+local combatActionEvent = remotes:WaitForChild("CombatAction")
 
--- Tween info presets
-local tweenFast = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local tweenMedium = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local tweenSlow = TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-
--- HUD state
-local hudState = {
-	maxHealth = 100,
-	currentHealth = 100,
-	kills = 0,
-	combo = 0,
-	rage = 0,
-	maxRage = 100,
-}
-
--- Destroy old HUD if it exists
-local function cleanupHud()
-	local old = playerGui:FindFirstChild("HUD")
-	if old then old:Destroy() end
-end
-
--- Helper: create a UICorner
-local function addCorner(parent, radius)
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, radius or 8)
-	corner.Parent = parent
-end
-
--- Helper: create a UIStroke
-local function addStroke(parent, color, thickness)
-	local stroke = Instance.new("UIStroke")
-	stroke.Color = color or Color3.fromRGB(255, 255, 255)
-	stroke.Thickness = thickness or 1.5
-	stroke.Parent = parent
-end
-
--- Helper: create a text label
-local function makeLabel(parent, name, text, size, pos, textSize, color, bold)
-	local label = Instance.new("TextLabel")
-	label.Name = name
-	label.Size = size
-	label.Position = pos
-	label.BackgroundTransparency = 1
-	label.Text = text
-	label.TextSize = textSize or 16
-	label.TextColor3 = color or Color3.fromRGB(255, 255, 255)
-	label.Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham
-	label.TextStrokeTransparency = 0.6
-	label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-	label.TextXAlignment = Enum.TextXAlignment.Left
-	label.Parent = parent
-	return label
-end
-
--- Build the HUD
+-- ─────────────────────────────────────────────
+-- HUD Construction
+-- ─────────────────────────────────────────────
 local function buildHud()
-	cleanupHud()
+    -- Remove any existing HUD to allow clean reconnect
+    local existing = playerGui:FindFirstChild("HUD")
+    if existing then existing:Destroy() end
 
-	local screenGui = Instance.new("ScreenGui")
-	screenGui.Name = "HUD"
-	screenGui.ResetOnSpawn = false
-	screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-	screenGui.Parent = playerGui
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "HUD"
+    screenGui.ResetOnSpawn = false
+    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    screenGui.Parent = playerGui
 
-	-- ============================================================
-	-- HEALTH BAR (bottom left)
-	-- ============================================================
-	local healthContainer = Instance.new("Frame")
-	healthContainer.Name = "HealthContainer"
-	healthContainer.Size = UDim2.new(0, 300, 0, 50)
-	healthContainer.Position = UDim2.new(0, 20, 1, -120)
-	healthContainer.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-	healthContainer.BackgroundTransparency = 0.3
-	addCorner(healthContainer, 10)
-	addStroke(healthContainer, Color3.fromRGB(80, 80, 80), 1.5)
-	healthContainer.Parent = screenGui
+    -- ── Health Bar Container ──────────────────
+    local healthContainer = Instance.new("Frame")
+    healthContainer.Name = "HealthContainer"
+    healthContainer.Size = UDim2.new(0, 300, 0, 36)
+    healthContainer.Position = UDim2.new(0, 16, 1, -60)
+    healthContainer.AnchorPoint = Vector2.new(0, 1)
+    healthContainer.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    healthContainer.BorderSizePixel = 0
+    healthContainer.Parent = screenGui
 
-	local healthLabel = makeLabel(
-		healthContainer, "HealthLabel", "HP",
-		UDim2.new(0, 30, 1, 0),
-		UDim2.new(0, 8, 0, 0),
-		14, Color3.fromRGB(220, 220, 220), true
-	)
-	healthLabel.TextXAlignment = Enum.TextXAlignment.Left
+    local containerCorner = Instance.new("UICorner")
+    containerCorner.CornerRadius = UDim.new(0, 8)
+    containerCorner.Parent = healthContainer
 
-	-- Health bar background
-	local healthBarBg = Instance.new("Frame")
-	healthBarBg.Name = "HealthBarBg"
-	healthBarBg.Size = UDim2.new(1, -50, 0, 16)
-	healthBarBg.Position = UDim2.new(0, 42, 0.5, -8)
-	healthBarBg.BackgroundColor3 = Color3.fromRGB(40, 0, 0)
-	addCorner(healthBarBg, 6)
-	healthBarBg.Parent = healthContainer
+    -- Background track
+    local healthBg = Instance.new("Frame")
+    healthBg.Name = "HealthBg"
+    healthBg.Size = UDim2.new(1, -8, 1, -8)
+    healthBg.Position = UDim2.new(0, 4, 0, 4)
+    healthBg.BackgroundColor3 = Color3.fromRGB(60, 20, 20)
+    healthBg.BorderSizePixel = 0
+    healthBg.Parent = healthContainer
 
-	-- Health bar fill
-	local healthFill = Instance.new("Frame")
-	healthFill.Name = "HealthFill"
-	healthFill.Size = UDim2.new(1, 0, 1, 0)
-	healthFill.Position = UDim2.new(0, 0, 0, 0)
-	healthFill.BackgroundColor3 = Color3.fromRGB(60, 200, 80)
-	addCorner(healthFill, 6)
-	healthFill.Parent = healthBarBg
+    local bgCorner = Instance.new("UICorner")
+    bgCorner.CornerRadius = UDim.new(0, 5)
+    bgCorner.Parent = healthBg
 
-	-- Gradient on health fill
-	local grad = Instance.new("UIGradient")
-	grad.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(100, 255, 120)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(30, 160, 60)),
-	})
-	grad.Rotation = 90
-	grad.Parent = healthFill
+    -- Actual fill bar
+    local healthFill = Instance.new("Frame")
+    healthFill.Name = "HealthFill"
+    healthFill.Size = UDim2.new(1, 0, 1, 0)
+    healthFill.BackgroundColor3 = Color3.fromRGB(80, 220, 80)
+    healthFill.BorderSizePixel = 0
+    healthFill.Parent = healthBg
 
-	-- Health number label
-	local healthNumLabel = makeLabel(
-		healthContainer, "HealthNum", "100/100",
-		UDim2.new(0, 90, 0, 14),
-		UDim2.new(0, 42, 1, -16),
-		12, Color3.fromRGB(200, 255, 200), false
-	)
-	healthNumLabel.TextXAlignment = Enum.TextXAlignment.Left
+    local fillCorner = Instance.new("UICorner")
+    fillCorner.CornerRadius = UDim.new(0, 5)
+    fillCorner.Parent = healthFill
 
-	-- ============================================================
-	-- RAGE BAR (below health bar)
-	-- ============================================================
-	local rageContainer = Instance.new("Frame")
-	rageContainer.Name = "RageContainer"
-	rageContainer.Size = UDim2.new(0, 300, 0, 36)
-	rageContainer.Position = UDim2.new(0, 20, 1, -76)
-	rageContainer.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-	rageContainer.BackgroundTransparency = 0.3
-	addCorner(rageContainer, 8)
-	addStroke(rageContainer, Color3.fromRGB(80, 80, 80), 1.5)
-	rageContainer.Parent = screenGui
+    -- Health label overlay
+    local healthLabel = Instance.new("TextLabel")
+    healthLabel.Name = "HealthLabel"
+    healthLabel.Size = UDim2.new(1, 0, 1, 0)
+    healthLabel.BackgroundTransparency = 1
+    healthLabel.Text = "100 / 100"
+    healthLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    healthLabel.TextScaled = true
+    healthLabel.Font = Enum.Font.GothamBold
+    healthLabel.ZIndex = 3
+    healthLabel.Parent = healthBg
 
-	local rageIconLabel = makeLabel(
-		rageContainer, "RageIcon", "RAGE",
-		UDim2.new(0, 42, 1, 0),
-		UDim2.new(0, 8, 0, 0),
-		12, Color3.fromRGB(255, 120, 40), true
-	)
-	rageIconLabel.TextXAlignment = Enum.TextXAlignment.Left
+    -- ── Stats Panel ───────────────────────────
+    local statsFrame = Instance.new("Frame")
+    statsFrame.Name = "StatsFrame"
+    statsFrame.Size = UDim2.new(0, 200, 0, 120)
+    statsFrame.Position = UDim2.new(1, -216, 0, 16)
+    statsFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 40)
+    statsFrame.BackgroundTransparency = 0.3
+    statsFrame.BorderSizePixel = 0
+    statsFrame.Parent = screenGui
 
-	local rageBarBg = Instance.new("Frame")
-	rageBarBg.Name = "RageBarBg"
-	rageBarBg.Size = UDim2.new(1, -58, 0, 12)
-	rageBarBg.Position = UDim2.new(0, 50, 0.5, -6)
-	rageBarBg.BackgroundColor3 = Color3.fromRGB(50, 20, 0)
-	addCorner(rageBarBg, 5)
-	rageBarBg.Parent = rageContainer
+    local statsCorner = Instance.new("UICorner")
+    statsCorner.CornerRadius = UDim.new(0, 10)
+    statsCorner.Parent = statsFrame
 
-	local rageFill = Instance.new("Frame")
-	rageFill.Name = "RageFill"
-	rageFill.Size = UDim2.new(0, 0, 1, 0)
-	rageFill.BackgroundColor3 = Color3.fromRGB(255, 80, 0)
-	addCorner(rageFill, 5)
-	rageFill.Parent = rageBarBg
+    local statsLayout = Instance.new("UIListLayout")
+    statsLayout.Padding = UDim.new(0, 4)
+    statsLayout.FillDirection = Enum.FillDirection.Vertical
+    statsLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    statsLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+    statsLayout.Parent = statsFrame
 
-	local rageGrad = Instance.new("UIGradient")
-	rageGrad.Color = ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 160, 40)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(200, 40, 0)),
-	})
-	rageGrad.Rotation = 90
-	rageGrad.Parent = rageFill
+    local statsPadding = Instance.new("UIPadding")
+    statsPadding.PaddingLeft = UDim.new(0, 8)
+    statsPadding.PaddingTop = UDim.new(0, 8)
+    statsPadding.Parent = statsFrame
 
-	-- ============================================================
-	-- STAT LABELS (top left)
-	-- ============================================================
-	local statsContainer = Instance.new("Frame")
-	statsContainer.Name = "StatsContainer"
-	statsContainer.Size = UDim2.new(0, 200, 0, 80)
-	statsContainer.Position = UDim2.new(0, 20, 0, 20)
-	statsContainer.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
-	statsContainer.BackgroundTransparency = 0.4
-	addCorner(statsContainer, 10)
-	addStroke(statsContainer, Color3.fromRGB(60, 60, 60), 1.5)
-	statsContainer.Parent = screenGui
+    -- Helper to make a stat label
+    local function makeStatLabel(name, defaultText)
+        local lbl = Instance.new("TextLabel")
+        lbl.Name = name
+        lbl.Size = UDim2.new(1, -8, 0, 22)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = defaultText
+        lbl.TextColor3 = Color3.fromRGB(210, 210, 255)
+        lbl.TextScaled = true
+        lbl.Font = Enum.Font.Gotham
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Parent = statsFrame
+        return lbl
+    end
 
-	local killsLabel = makeLabel(
-		statsContainer, "KillsLabel", "☠ Kills: 0",
-		UDim2.new(1, -10, 0, 30),
-		UDim2.new(0, 10, 0, 8),
-		16, Color3.fromRGB(255, 220, 60), true
-	)
+    local killsLabel  = makeStatLabel("KillsLabel",  "⚔  Kills: 0")
+    local deathsLabel = makeStatLabel("DeathsLabel", "💀 Deaths: 0")
+    local scoreLabel  = makeStatLabel("ScoreLabel",  "★  Score: 0")
+    local pvpLabel    = makeStatLabel("PvpLabel",    "🔴 PvP: Off")
 
-	local comboLabel = makeLabel(
-		statsContainer, "ComboLabel", "⚡ Combo: x0",
-		UDim2.new(1, -10, 0, 30),
-		UDim2.new(0, 10, 0, 42),
-		14, Color3.fromRGB(100, 200, 255), false
-	)
+    -- ── Action Buttons ────────────────────────
+    local buttonContainer = Instance.new("Frame")
+    buttonContainer.Name = "ButtonContainer"
+    buttonContainer.Size = UDim2.new(0, 260, 0, 60)
+    buttonContainer.Position = UDim2.new(0.5, 0, 1, -16)
+    buttonContainer.AnchorPoint = Vector2.new(0.5, 1)
+    buttonContainer.BackgroundTransparency = 1
+    buttonContainer.Parent = screenGui
 
-	-- ============================================================
-	-- COMBAT FEEDBACK / COMBO POPUP (center top)
-	-- ============================================================
-	local feedbackLabel = Instance.new("TextLabel")
-	feedbackLabel.Name = "FeedbackLabel"
-	feedbackLabel.Size = UDim2.new(0, 400, 0, 60)
-	feedbackLabel.Position = UDim2.new(0.5, -200, 0, 80)
-	feedbackLabel.BackgroundTransparency = 1
-	feedbackLabel.Text = ""
-	feedbackLabel.TextSize = 36
-	feedbackLabel.TextColor3 = Color3.fromRGB(255, 200, 50)
-	feedbackLabel.Font = Enum.Font.GothamBlack
-	feedbackLabel.TextStrokeTransparency = 0.3
-	feedbackLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-	feedbackLabel.TextXAlignment = Enum.TextXAlignment.Center
-	feedbackLabel.TextTransparency = 1
-	feedbackLabel.Parent = screenGui
+    local buttonLayout = Instance.new("UIListLayout")
+    buttonLayout.FillDirection = Enum.FillDirection.Horizontal
+    buttonLayout.Padding = UDim.new(0, 10)
+    buttonLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    buttonLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+    buttonLayout.Parent = buttonContainer
 
-	-- ============================================================
-	-- ACTION BUTTONS (bottom right)
-	-- ============================================================
-	local actionsContainer = Instance.new("Frame")
-	actionsContainer.Name = "ActionsContainer"
-	actionsContainer.Size = UDim2.new(0, 220, 0, 110)
-	actionsContainer.Position = UDim2.new(1, -240, 1, -130)
-	actionsContainer.BackgroundTransparency = 1
-	actionsContainer.Parent = screenGui
+    -- Generic button factory
+    local function makeButton(name, labelText, color)
+        local btn = Instance.new("TextButton")
+        btn.Name = name
+        btn.Size = UDim2.new(0, 120, 0, 50)
+        btn.BackgroundColor3 = color
+        btn.Text = labelText
+        btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        btn.TextScaled = true
+        btn.Font = Enum.Font.GothamBold
+        btn.BorderSizePixel = 0
+        btn.Parent = buttonContainer
 
-	local actionDefs = {
-		{ name = "Attack",    key = "LMB", color = Color3.fromRGB(220, 60, 60),   pos = UDim2.new(0, 0, 0, 0) },
-		{ name = "Block",     key = "RMB", color = Color3.fromRGB(60, 120, 220),  pos = UDim2.new(0, 110, 0, 0) },
-		{ name = "Dodge",     key = "Q",   color = Color3.fromRGB(80, 200, 120),  pos = UDim2.new(0, 0, 0, 60) },
-		{ name = "RageMode",  key = "E",   color = Color3.fromRGB(255, 100, 20),  pos = UDim2.new(0, 110, 0, 60) },
-	}
+        local btnCorner = Instance.new("UICorner")
+        btnCorner.CornerRadius = UDim.new(0, 10)
+        btnCorner.Parent = btn
 
-	local actionButtons = {} -- keyed by action name
+        -- Hover / press tweens
+        local hoverInfo  = TweenInfo.new(0.15, Enum.EasingStyle.Quad)
+        local normalColor = color
+        local hoverColor  = Color3.new(
+            math.min(color.R + 0.12, 1),
+            math.min(color.G + 0.12, 1),
+            math.min(color.B + 0.12, 1)
+        )
 
-	for _, def in ipairs(actionDefs) do
-		local btn = Instance.new("Frame")
-		btn.Name = def.name .. "Btn"
-		btn.Size = UDim2.new(0, 100, 0, 50)
-		btn.Position = def.pos
-		btn.BackgroundColor3 = def.color
-		btn.BackgroundTransparency = 0.2
-		addCorner(btn, 8)
-		addStroke(btn, Color3.fromRGB(200, 200, 200), 1)
-		btn.Parent = actionsContainer
+        btn.MouseEnter:Connect(function()
+            TweenService:Create(btn, hoverInfo, {BackgroundColor3 = hoverColor}):Play()
+        end)
+        btn.MouseLeave:Connect(function()
+            TweenService:Create(btn, hoverInfo, {BackgroundColor3 = normalColor}):Play()
+        end)
+        btn.MouseButton1Down:Connect(function()
+            TweenService:Create(btn, TweenInfo.new(0.08), {Size = UDim2.new(0, 112, 0, 44)}):Play()
+        end)
+        btn.MouseButton1Up:Connect(function()
+            TweenService:Create(btn, TweenInfo.new(0.08), {Size = UDim2.new(0, 120, 0, 50)}):Play()
+        end)
 
-		-- Label
-		local btnLabel = Instance.new("TextLabel")
-		btnLabel.Size = UDim2.new(1, 0, 0.55, 0)
-		btnLabel.Position = UDim2.new(0, 0, 0, 0)
-		btnLabel.BackgroundTransparency = 1
-		btnLabel.Text = def.name
-		btnLabel.TextSize = 12
-		btnLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-		btnLabel.Font = Enum.Font.GothamBold
-		btnLabel.TextStrokeTransparency = 0.5
-		btnLabel.Parent = btn
+        return btn
+    end
 
-		-- Key hint
-		local keyLabel = Instance.new("TextLabel")
-		keyLabel.Size = UDim2.new(1, 0, 0.4, 0)
-		keyLabel.Position = UDim2.new(0, 0, 0.58, 0)
-		keyLabel.BackgroundTransparency = 1
-		keyLabel.Text = "[" .. def.key .. "]"
-		keyLabel.TextSize = 11
-		keyLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-		keyLabel.Font = Enum.Font.Gotham
-		keyLabel.Parent = btn
+    local attackBtn = makeButton("AttackButton", "⚔ Attack", Color3.fromRGB(200, 60, 60))
+    local pvpTogBtn = makeButton("PvpToggle",    "🔁 PvP",   Color3.fromRGB(60, 100, 200))
 
-		-- Cooldown overlay
-		local cdOverlay = Instance.new("Frame")
-		cdOverlay.Name = "Cooldown"
-		cdOverlay.Size = UDim2.new(1, 0, 0, 0) -- grows from bottom
-		cdOverlay.Position = UDim2.new(0, 0, 1, 0)
-		cdOverlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-		cdOverlay.BackgroundTransparency = 0.4
-		addCorner(cdOverlay, 8)
-		cdOverlay.ClipsDescendants = true
-		cdOverlay.Parent = btn
+    -- ── Button Callbacks ──────────────────────
+    attackBtn.Activated:Connect(function()
+        combatActionEvent:FireServer("attack")
+    end)
 
-		actionButtons[def.name] = { frame = btn, overlay = cdOverlay }
-	end
+    pvpTogBtn.Activated:Connect(function()
+        combatActionEvent:FireServer("togglePvp")
+    end)
 
-	-- ============================================================
-	-- CROSSHAIR / CENTER DOT
-	-- ============================================================
-	local crosshair = Instance.new("Frame")
-	crosshair.Name = "Crosshair"
-	crosshair.Size = UDim2.new(0, 6, 0, 6)
-	crosshair.Position = UDim2.new(0.5, -3, 0.5, -3)
-	crosshair.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-	crosshair.BackgroundTransparency = 0.3
-	addCorner(crosshair, 3)
-	crosshair.Parent = screenGui
+    -- ─────────────────────────────────────────
+    -- Remote Event Listeners
+    -- ─────────────────────────────────────────
 
-	-- ============================================================
-	-- RETURN references
-	-- ============================================================
-	return {
-		screenGui = screenGui,
-		healthFill = healthFill,
-		healthNumLabel = healthNumLabel,
-		rageFill = rageFill,
-		killsLabel = killsLabel,
-		comboLabel = comboLabel,
-		feedbackLabel = feedbackLabel,
-		actionButtons = actionButtons,
-	}
+    -- Health update: expects (currentHp, maxHp)
+    updateHealthEvent.OnClientEvent:Connect(function(current, max)
+        current = math.clamp(current, 0, max)
+        local ratio = (max > 0) and (current / max) or 0
+
+        -- Tween bar width
+        TweenService:Create(healthFill, TweenInfo.new(0.3, Enum.EasingStyle.Quad), {
+            Size = UDim2.new(ratio, 0, 1, 0)
+        }):Play()
+
+        -- Color shift: green → yellow → red
+        local barColor
+        if ratio > 0.5 then
+            barColor = Color3.fromRGB(80, 220, 80)
+        elseif ratio > 0.25 then
+            barColor = Color3.fromRGB(220, 180, 40)
+        else
+            barColor = Color3.fromRGB(220, 60, 60)
+        end
+        TweenService:Create(healthFill, TweenInfo.new(0.3), {BackgroundColor3 = barColor}):Play()
+
+        healthLabel.Text = string.format("%d / %d", math.floor(current), math.floor(max))
+    end)
+
+    -- Stats update: expects table {kills, deaths, score}
+    updateStatsEvent.OnClientEvent:Connect(function(stats)
+        if stats.kills  ~= nil then killsLabel.Text  = "⚔  Kills: "  .. stats.kills  end
+        if stats.deaths ~= nil then deathsLabel.Text = "💀 Deaths: " .. stats.deaths end
+        if stats.score  ~= nil then scoreLabel.Text  = "★  Score: "  .. stats.score  end
+    end)
+
+    -- PvP status update: expects (bool)
+    updatePvpEvent.OnClientEvent:Connect(function(isEnabled)
+        if isEnabled then
+            pvpLabel.Text = "🔴 PvP: On"
+            pvpLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        else
+            pvpLabel.Text = "🟢 PvP: Off"
+            pvpLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+        end
+    end)
+
+    -- Sync health from character humanoid directly as a fallback
+    local character = player.Character
+    if character then
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            humanoid.HealthChanged:Connect(function(hp)
+                local maxHp = humanoid.MaxHealth
+                updateHealthEvent:FireServer() -- optional server sync trigger
+                -- Update locally for immediate feedback
+                local ratio = (maxHp > 0) and (hp / maxHp) or 0
+                TweenService:Create(healthFill, TweenInfo.new(0.2), {
+                    Size = UDim2.new(ratio, 0, 1, 0)
+                }):Play()
+                healthLabel.Text = string.format("%d / %d", math.floor(hp), math.floor(maxHp))
+            end)
+        end
+    end
+
+    return screenGui
 end
 
--- Active HUD reference
-local hud = nil
-local feedbackTween = nil -- track active feedback tween
+-- ─────────────────────────────────────────────
+-- Initial Build
+-- ─────────────────────────────────────────────
+buildHud()
 
--- ============================================================
--- HUD UPDATE FUNCTIONS
--- ============================================================
-
-local function updateHealthBar(currentHp, maxHp)
-	if not hud then return end
-	maxHp = maxHp or hudState.maxHealth
-	currentHp = math.clamp(currentHp, 0, maxHp)
-	hudState.currentHealth = currentHp
-	hudState.maxHealth = maxHp
-
-	local ratio = currentHp / maxHp
-
-	-- Tween health bar fill width
-	TweenService:Create(hud.healthFill, tweenMedium, {
-		Size = UDim2.new(ratio, 0, 1, 0)
-	}):Play()
-
-	-- Change color based on health ratio
-	local fillColor
-	if ratio > 0.6 then
-		fillColor = Color3.fromRGB(60, 200, 80)
-	elseif ratio > 0.3 then
-		fillColor = Color3.fromRGB(220, 180, 40)
-	else
-		fillColor = Color3.fromRGB(220, 60, 60)
-	end
-
-	TweenService:Create(hud.healthFill, tweenMedium, {
-		BackgroundColor3 = fillColor
-	}):Play()
-
-	hud.healthNumLabel.Text = math.floor(currentHp) .. "/" .. math.floor(maxHp)
-end
-
-local function updateRageBar(rageAmount, maxRage)
-	if not hud then return end
-	maxRage = maxRage or hudState.maxRage
-	rageAmount = math.clamp(rageAmount, 0, maxRage)
-	hudState.rage = rageAmount
-	hudState.maxRage = maxRage
-
-	local ratio = rageAmount / maxRage
-
-	TweenService:Create(hud.rageFill, tweenMedium, {
-		Size = UDim2.new(ratio, 0, 1, 0)
-	}):Play()
-end
-
-local function updateKills(kills)
-	if not hud then return end
-	hudState.kills = kills
-	hud.killsLabel.Text = "☠ Kills: " .. kills
-
-	-- Brief scale bounce effect using position shift
-	TweenService:Create(hud.killsLabel, tweenFast, {
-		TextSize = 20
-	}):Play()
-	task.delay(0.2, function()
-		if hud and hud.killsLabel then
-			TweenService:Create(hud.killsLabel, tweenFast, { TextSize = 16 }):Play()
-		end
-	end)
-end
-
-local function updateCombo(combo)
-	if not hud then return end
-	hudState.combo = combo
-	hud.comboLabel.Text = "⚡ Combo: x" .. combo
-
-	-- Highlight on high combo
-	local color = combo >= 10 and Color3.fromRGB(255, 100, 40)
-		or combo >= 5 and Color3.fromRGB(255, 200, 40)
-		or Color3.fromRGB(100, 200, 255)
-	TweenService:Create(hud.comboLabel, tweenFast, { TextColor3 = color }):Play()
-end
-
-local function showCombatFeedback(message, color)
-	if not hud then return end
-	color = color or Color3.fromRGB(255, 200, 50)
-
-	-- Cancel previous tween
-	if feedbackTween then feedbackTween:Cancel() end
-
-	hud.feedbackLabel.Text = message
-	hud.feedbackLabel.TextColor3 = color
-	hud.feedbackLabel.TextTransparency = 0
-	hud.feedbackLabel.Position = UDim2.new(0.5, -200, 0, 80)
-
-	-- Float upward and fade
-	local moveTween = TweenService:Create(hud.feedbackLabel, TweenInfo.new(0.9, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {
-		Position = UDim2.new(0.5, -200, 0, 40),
-		TextTransparency = 1,
-	})
-	moveTween:Play()
-	feedbackTween = moveTween
-end
-
-local function triggerActionCooldown(actionName, duration)
-	if not hud then return end
-	local actionData = hud.actionButtons[actionName]
-	if not actionData then return end
-
-	local overlay = actionData.overlay
-
-	-- Animate overlay from full cover to none (simulating cooldown drain)
-	overlay.Size = UDim2.new(1, 0, 1, 0)
-	overlay.Position = UDim2.new(0, 0, 0, 0)
-
-	local drainTween = TweenService:Create(overlay, TweenInfo.new(duration, Enum.EasingStyle.Linear), {
-		Size = UDim2.new(1, 0, 0, 0),
-		Position = UDim2.new(0, 0, 1, 0),
-	})
-	drainTween:Play()
-end
-
--- Sync health from character's Humanoid
-local function connectHumanoidHealth(character)
-	local humanoid = character:WaitForChild("Humanoid")
-
-	-- Initial sync
-	updateHealthBar(humanoid.Health, humanoid.MaxHealth)
-
-	humanoid.HealthChanged:Connect(function(newHp)
-		updateHealthBar(newHp, humanoid.MaxHealth)
-	end)
-
-	humanoid.Died:Connect(function()
-		updateHealthBar(0, humanoid.MaxHealth)
-	end)
-end
-
--- ============================================================
--- SETUP & RECONNECT
--- ============================================================
-
-local function setup(character)
-	hud = buildHud()
-	connectHumanoidHealth(character)
-end
-
--- Initial setup if character already exists
-if player.Character then
-	setup(player.Character)
-end
-
--- Reconnect HUD on character respawn
+-- Rebuild HUD on character respawn (handles reconnect)
 player.CharacterAdded:Connect(function(character)
-	setup(character)
-end)
-
--- ============================================================
--- REMOTE EVENT LISTENERS
--- ============================================================
-
--- UpdateHealth: (currentHp, maxHp)
-updateHealthEvent.OnClientEvent:Connect(function(currentHp, maxHp)
-	updateHealthBar(currentHp, maxHp)
-end)
-
--- UpdateStats: (statTable) e.g. {kills=5, combo=3, rage=40}
-updateStatsEvent.OnClientEvent:Connect(function(stats)
-	if stats.kills ~= nil then updateKills(stats.kills) end
-	if stats.combo ~= nil then updateCombo(stats.combo) end
-	if stats.rage ~= nil then updateRageBar(stats.rage, stats.maxRage or hudState.maxRage) end
-end)
-
--- CombatFeedback: (message, colorHex or Color3)
-combatFeedbackEvent.OnClientEvent:Connect(function(message, color)
-	showCombatFeedback(message, color)
-end)
-
--- ActionCooldown: (actionName, duration)
-actionCooldownEvent.OnClientEvent:Connect(function(actionName, duration)
-	triggerActionCooldown(actionName, duration)
+    -- Small delay to let character fully load
+    task.wait(0.5)
+    buildHud()
 end)
