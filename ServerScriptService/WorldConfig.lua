@@ -1,110 +1,120 @@
 local WorldConfig = {}
 
-WorldConfig.GameName = "route-rage"
-WorldConfig.MaxPlayers = 16
-WorldConfig.RoundDuration = 300 -- 5 minutes per round
-WorldConfig.DefaultArea = "Highway Interchange"
+WorldConfig.GameName = "Rainbow Dash"
+WorldConfig.MaxPlayers = 12
+WorldConfig.RoundDuration = 300 -- 5 minutes per puzzle round
+WorldConfig.DefaultArea = "Prism Lobby"
 
--- Combat-specific configuration for this action game
-WorldConfig.CombatConfig = {
-	RespawnDelay = 5,           -- seconds before player respawns
-	MaxHealth = 100,
-	HealthRegenRate = 2,        -- HP per second when out of combat
-	HealthRegenDelay = 8,       -- seconds after last hit before regen begins
-	OutOfCombatTime = 6,        -- seconds of no damage to leave combat state
-	KillStreakThresholds = {3, 5, 10}, -- kills needed for each streak bonus
-	KillStreakBonuses = {
-		[3]  = { name = "On Fire",     speedBoost = 1.15 },
-		[5]  = { name = "Unstoppable", speedBoost = 1.25, damageBoost = 1.10 },
-		[10] = { name = "Rampage",     speedBoost = 1.35, damageBoost = 1.25 },
-	},
-	FallDamageThreshold = 50,   -- studs of fall before damage applies
-	FallDamageMultiplier = 0.5,
-	FriendlyFire = false,
-	HeadshotMultiplier = 2.0,
-	MaxCarryWeight = 50,        -- arbitrary weight units for loadout system
-	DefaultWeapon = "Pistol",
-	WeaponPickupRadius = 5,     -- studs within which a player can grab a pickup
-	PowerupDuration = 15,       -- seconds a powerup remains active
-	ScorePerKill = 100,
-	ScorePerAssist = 50,
-	ScorePerObjective = 200,
+-- Puzzle-specific configuration
+WorldConfig.PuzzleConfig = {
+	HintCooldown = 30,           -- seconds between hint requests
+	MaxHintsPerRound = 3,        -- hints allowed per player per round
+	SolveScoreBase = 100,        -- base score awarded for solving a puzzle
+	TimeBonus = true,            -- award bonus points for fast solves
+	TimeBonusMultiplier = 1.5,   -- multiplier applied to time-remaining bonus
+	CheckpointSaveEnabled = true, -- save player progress mid-round
+	ColorblindAssist = true,     -- enable colorblind-friendly overlays
+	PuzzleResetDelay = 5,        -- seconds before resetting a failed puzzle
+	CoopSolveBonus = 25,         -- extra points when 2+ players solve together
+	SequencePuzzleSteps = 6,     -- number of steps in sequence-type puzzles
 }
 
--- Vehicle configuration relevant to "route-rage" road theme
-WorldConfig.VehicleConfig = {
-	DefaultSpeed = 60,          -- studs per second base vehicle speed
-	MaxSpeed = 120,
-	BoostMultiplier = 1.75,
-	BoostDuration = 3,          -- seconds per boost charge
-	BoostRechargeTime = 8,
-	RamDamageMultiplier = 1.5,  -- bonus damage when colliding with an enemy
-	VehicleHealthPool = 300,
-	VehicleRespawnDelay = 10,
-}
-
--- Areas for the game world with realistic spawn Vector3 positions
 WorldConfig.Areas = {
 	{
-		name = "Highway Interchange",  -- starting area: elevated multilane crossing
+		name = "Prism Lobby",
+		description = "The central hub where players gather before rounds begin.",
 		spawnPoints = {
-			Vector3.new(  10,  5,   0),
-			Vector3.new( -10,  5,   0),
-			Vector3.new(   0,  5,  15),
-			Vector3.new(   0,  5, -15),
-			Vector3.new(  20,  5,  20),
-			Vector3.new( -20,  5, -20),
+			Vector3.new(0, 2, 0),
+			Vector3.new(5, 2, 0),
+			Vector3.new(-5, 2, 0),
+			Vector3.new(0, 2, 5),
+			Vector3.new(0, 2, -5),
+			Vector3.new(5, 2, 5),
+			Vector3.new(-5, 2, 5),
+			Vector3.new(5, 2, -5),
+			Vector3.new(-5, 2, -5),
 		},
+		puzzleType = nil, -- lobby area, no puzzles
+		ambientColor = Color3.fromRGB(255, 255, 255),
 	},
 	{
-		name = "Industrial Dockyard",  -- waterfront with cargo stacks and cranes
+		name = "Chromatic Caverns",
+		description = "Underground caves with color-matching tile puzzles.",
 		spawnPoints = {
-			Vector3.new( 150, 3,  200),
-			Vector3.new( 170, 3,  220),
-			Vector3.new( 130, 3,  180),
-			Vector3.new( 160, 12, 200), -- elevated cargo container top
-			Vector3.new( 145, 3,  240),
-			Vector3.new( 175, 3,  185),
+			Vector3.new(120, 4, 30),
+			Vector3.new(128, 4, 30),
+			Vector3.new(124, 4, 38),
+			Vector3.new(116, 4, 38),
+			Vector3.new(132, 4, 22),
 		},
+		puzzleType = "ColorMatch",
+		ambientColor = Color3.fromRGB(80, 40, 120),
 	},
 	{
-		name = "Abandoned Overpass",   -- crumbling elevated road with gaps
+		name = "Spectrum Bridge",
+		description = "A series of suspended platforms requiring sequence puzzles to cross.",
 		spawnPoints = {
-			Vector3.new(-200, 40,  50),
-			Vector3.new(-220, 40,  70),
-			Vector3.new(-180, 40,  30),
-			Vector3.new(-210, 40,  90),
-			Vector3.new(-190, 40,  10),
+			Vector3.new(-150, 20, 10),
+			Vector3.new(-142, 20, 10),
+			Vector3.new(-146, 20, 18),
+			Vector3.new(-154, 20, 18),
+			Vector3.new(-138, 20, 2),
 		},
+		puzzleType = "Sequence",
+		ambientColor = Color3.fromRGB(255, 180, 60),
 	},
 	{
-		name = "Downtown Grid",        -- tight city-block street fighting
+		name = "Refraction Ruins",
+		description = "Ancient ruins with mirror and light-beam deflection puzzles.",
 		spawnPoints = {
-			Vector3.new(  80, 3, -150),
-			Vector3.new( 100, 3, -130),
-			Vector3.new(  60, 3, -170),
-			Vector3.new(  90, 3, -190),
-			Vector3.new(  70, 3, -120),
-			Vector3.new( 110, 3, -160),
-			Vector3.new(  50, 3, -140),
+			Vector3.new(60, 6, -200),
+			Vector3.new(68, 6, -200),
+			Vector3.new(64, 6, -192),
+			Vector3.new(52, 6, -192),
+			Vector3.new(76, 6, -208),
+			Vector3.new(60, 6, -208),
 		},
+		puzzleType = "LightBeam",
+		ambientColor = Color3.fromRGB(180, 220, 255),
 	},
 	{
-		name = "Tunnel Network",       -- underground corridors beneath the city
+		name = "Aurora Apex",
+		description = "The final challenge zone with multi-layer rainbow cipher puzzles.",
 		spawnPoints = {
-			Vector3.new( -50, -10, -300),
-			Vector3.new( -70, -10, -320),
-			Vector3.new( -30, -10, -280),
-			Vector3.new( -60, -10, -340),
-			Vector3.new( -40, -10, -260),
+			Vector3.new(0, 80, -350),
+			Vector3.new(8, 80, -350),
+			Vector3.new(-8, 80, -350),
+			Vector3.new(4, 80, -342),
+			Vector3.new(-4, 80, -342),
 		},
+		puzzleType = "RainbowCipher",
+		ambientColor = Color3.fromRGB(200, 255, 220),
 	},
 }
 
--- Quick-access lookup: area name -> area table (built at require time)
-WorldConfig.AreaMap = {}
-for _, area in ipairs(WorldConfig.Areas) do
-	WorldConfig.AreaMap[area.name] = area
+-- Helper: look up an area table by name
+function WorldConfig.GetAreaByName(areaName)
+	for _, area in ipairs(WorldConfig.Areas) do
+		if area.name == areaName then
+			return area
+		end
+	end
+	return nil -- area not found
+end
+
+-- Helper: return a random spawn point Vector3 from a given area
+function WorldConfig.GetRandomSpawn(areaName)
+	local area = WorldConfig.GetAreaByName(areaName)
+	if not area or #area.spawnPoints == 0 then
+		return Vector3.new(0, 2, 0) -- fallback to world origin
+	end
+	local index = math.random(1, #area.spawnPoints)
+	return area.spawnPoints[index]
+end
+
+-- Helper: return the default area table
+function WorldConfig.GetDefaultArea()
+	return WorldConfig.GetAreaByName(WorldConfig.DefaultArea)
 end
 
 return WorldConfig

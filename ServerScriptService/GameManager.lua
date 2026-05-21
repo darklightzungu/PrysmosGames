@@ -1,3 +1,5 @@
+local GameManager = {}
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local DataStoreService = game:GetService("DataStoreService")
@@ -5,395 +7,444 @@ local RunService = game:GetService("RunService")
 
 local WorldConfig = require(script.Parent:WaitForChild("WorldConfig"))
 
--- DataStore setup
 local gameDataStore = DataStoreService:GetDataStore("GameData_v1")
 
--- Remotes folder setup
+-- player data cache keyed by userId
+local playerDataCache = {}
+
+-- active combat sessions: combatSessions[userId] = { target, startTime, combo }
+local combatSessions = {}
+
+-- pvp duels: pvpDuels[userId] = { opponentId, accepted, startTime }
+local pvpDuels = {}
+
+-- ensure Remotes folder exists in ReplicatedStorage
 local remotes = ReplicatedStorage:FindFirstChild("Remotes")
 if not remotes then
-	remotes = Instance.new("Folder")
-	remotes.Name = "Remotes"
-	remotes.Parent = ReplicatedStorage
+    remotes = Instance.new("Folder")
+    remotes.Name = "Remotes"
+    remotes.Parent = ReplicatedStorage
 end
 
--- Create RemoteEvents for each mechanic
-local function getOrCreateRemoteEvent(name)
-	local existing = remotes:FindFirstChild(name)
-	if existing then return existing end
-	local event = Instance.new("RemoteEvent")
-	event.Name = name
-	event.Parent = remotes
-	return event
+-- helper: create RemoteEvent if it doesn't already exist
+local function ensureRemoteEvent(name)
+    local existing = remotes:FindFirstChild(name)
+    if existing then
+        return existing
+    end
+    local re = Instance.new("RemoteEvent")
+    re.Name = name
+    re.Parent = remotes
+    return re
 end
 
-local combatEvent       = getOrCreateRemoteEvent("Combat")
-local dealDamageEvent   = getOrCreateRemoteEvent("DealDamage")
-local playerDiedEvent   = getOrCreateRemoteEvent("PlayerDied")
-local combatStateEvent  = getOrCreateRemoteEvent("CombatState")
+-- create mechanic RemoteEvents
+local combatEvent = ensureRemoteEvent("CombatEvent")
+local pvpEvent    = ensureRemoteEvent("PvpEvent")
 
--- In-memory player data cache
-local playerData = {}
-
--- Default player data template
+-- default player data template
 local function defaultData()
-	return {
-		kills  = 0,
-		deaths = 0,
-		score  = 0,
-		level  = 1,
-		xp     = 0,
-	}
+    return {
+        kills    = 0,
+        deaths   = 0,
+        wins     = 0,
+        losses   = 0,
+        combos   = 0,
+        health   = 100,
+        level    = 1,
+        xp       = 0,
+    }
 end
 
--- Load data from DataStore for a player
-local function loadPlayerData(player)
-	local key = tostring(player.UserId)
-	local success, result = pcall(function()
-		return gameDataStore:GetAsync(key)
-	end)
-	if success and result then
-		-- Merge stored data with defaults to handle new fields
-		local data = defaultData()
-		for k, v in pairs(result) do
-			data[k] = v
-		end
-		playerData[player.UserId] = data
-	else
-		if not success then
-			warn("[GameManager] Failed to load data for " .. player.Name .. ": " .. tostring(result))
-		end
-		playerData[player.UserId] = defaultData()
-	end
+-- load data from DataStore
+local function loadData(userId)
+    local data
+    local success, err = pcall(function()
+        data = gameDataStore:GetAsync(tostring(userId))
+    end)
+    if success and data then
+        -- merge with defaults so new fields are always present
+        local base = defaultData()
+        for k, v in pairs(data) do
+            base[k] = v
+        end
+        return base
+    else
+        if not success then
+            warn("[GameManager] Failed to load data for", userId, ":", err)
+        end
+        return defaultData()
+    end
 end
 
--- Save data to DataStore for a player
-local function savePlayerData(player)
-	local data = playerData[player.UserId]
-	if not data then return end
-	local key = tostring(player.UserId)
-	local success, err = pcall(function()
-		gameDataStore:SetAsync(key, data)
-	end)
-	if not success then
-		warn("[GameManager] Failed to save data for " .. player.Name .. ": " .. tostring(err))
-	end
+-- save data to DataStore
+local function saveData(userId)
+    local data = playerDataCache[userId]
+    if not data then return end
+    local success, err = pcall(function()
+        gameDataStore:SetAsync(tostring(userId), data)
+    end)
+    if not success then
+        warn("[GameManager] Failed to save data for", userId, ":", err)
+    end
 end
 
--- Spawn player at the configured spawn point
-local function spawnPlayerAtSpawn(player)
-	local spawnPoint = nil
+-- spawn character at WorldConfig spawn point
+local function spawnCharacter(player)
+    local spawnCFrame = CFrame.new(0, 5, 0) -- fallback position
+    local spawnPoint = WorldConfig.DefaultArea and WorldConfig.DefaultArea.SpawnPoint
+    if spawnPoint then
+        if typeof(spawnPoint) == "CFrame" then
+            spawnCFrame = spawnPoint
+        elseif typeof(spawnPoint) == "Vector3" then
+            spawnCFrame = CFrame.new(spawnPoint)
+        elseif spawnPoint:IsA("BasePart") then
+            spawnCFrame = spawnPoint.CFrame + Vector3.new(0, 5, 0)
+        end
+    end
 
-	-- Attempt to get spawn point from WorldConfig.DefaultArea
-	local ok, result = pcall(function()
-		local area = WorldConfig.DefaultArea
-		if typeof(area) == "Instance" then
-			-- Look for a SpawnLocation or Part named "SpawnPoint" inside the area
-			local sp = area:FindFirstChild("SpawnPoint") or area:FindFirstChildWhichIsA("SpawnLocation")
-			if sp then
-				return sp
-			end
-		elseif typeof(area) == "Vector3" then
-			return area
-		end
-		return nil
-	end)
+    -- load character if not loaded
+    if not player.Character then
+        player:LoadCharacter()
+    end
 
-	if ok and result then
-		spawnPoint = result
-	end
-
-	-- Apply spawn CFrame to character after it loads
-	local character = player.Character or player.CharacterAdded:Wait()
-	local humanoidRootPart = character:WaitForChild("HumanoidRootPart", 5)
-	if humanoidRootPart then
-		if typeof(spawnPoint) == "Instance" and spawnPoint:IsA("BasePart") then
-			humanoidRootPart.CFrame = spawnPoint.CFrame + Vector3.new(0, 3, 0)
-		elseif typeof(spawnPoint) == "Vector3" then
-			humanoidRootPart.CFrame = CFrame.new(spawnPoint + Vector3.new(0, 3, 0))
-		end
-	end
+    -- wait for character then teleport
+    local character = player.Character or player.CharacterAdded:Wait()
+    local hrp = character:WaitForChild("HumanoidRootPart", 10)
+    if hrp then
+        hrp.CFrame = spawnCFrame
+    end
 end
 
--- =====================
--- COMBAT SYSTEM
--- =====================
+-- -----------------------------------------------------------------------
+-- COMBAT LOGIC
+-- -----------------------------------------------------------------------
 
-local COMBO_WINDOW    = 1.5   -- seconds to chain combo hits
-local BASE_DAMAGE     = 20    -- base hit damage
-local COMBO_BONUS     = 5     -- extra damage per combo hit beyond first
-local KO_SCORE        = 100   -- score awarded for a kill
-local XP_PER_KILL     = 50
+local COMBO_WINDOW   = 2.0   -- seconds between hits to maintain combo
+local COMBO_BONUS    = 1.25  -- damage multiplier per combo hit beyond first
+local BASE_DAMAGE    = 15
 
--- Per-player combat state
-local combatState = {}
-
-local function getCombatState(userId)
-	if not combatState[userId] then
-		combatState[userId] = {
-			inCombat   = false,
-			comboCount = 0,
-			lastHitTime = 0,
-		}
-	end
-	return combatState[userId]
+-- calculate damage with combo multiplier
+local function calculateDamage(userId)
+    local session = combatSessions[userId]
+    if not session then return BASE_DAMAGE end
+    local multiplier = 1 + (session.combo - 1) * (COMBO_BONUS - 1)
+    return math.floor(BASE_DAMAGE * multiplier)
 end
 
--- Apply damage to a target character
-local function applyDamage(attacker, targetCharacter, damage)
-	if not targetCharacter then return end
-	local humanoid = targetCharacter:FindFirstChildOfClass("Humanoid")
-	if not humanoid or humanoid.Health <= 0 then return end
-	humanoid:TakeDamage(damage)
-	return humanoid.Health
+-- apply damage to a target player's character
+local function applyDamage(attacker, targetPlayer, damage)
+    local character = targetPlayer.Character
+    if not character then return end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return end
+
+    humanoid.Health = math.max(0, humanoid.Health - damage)
+
+    -- notify both clients
+    combatEvent:FireClient(attacker, {
+        action  = "HitDealt",
+        target  = targetPlayer.Name,
+        damage  = damage,
+        combo   = combatSessions[attacker.UserId] and combatSessions[attacker.UserId].combo or 1,
+    })
+    combatEvent:FireClient(targetPlayer, {
+        action  = "HitReceived",
+        source  = attacker.Name,
+        damage  = damage,
+    })
+
+    if humanoid.Health <= 0 then
+        -- handle kill
+        local attackerData = playerDataCache[attacker.UserId]
+        local victimData   = playerDataCache[targetPlayer.UserId]
+        if attackerData then attackerData.kills = attackerData.kills + 1 end
+        if victimData   then victimData.deaths  = victimData.deaths  + 1 end
+
+        combatEvent:FireClient(attacker, { action = "KillConfirmed", victim = targetPlayer.Name })
+        combatEvent:FireClient(targetPlayer, { action = "Eliminated", killer = attacker.Name })
+    end
 end
 
--- Award kill credit to attacker
-local function awardKill(attacker)
-	local data = playerData[attacker.UserId]
-	if not data then return end
-	data.kills  = data.kills + 1
-	data.score  = data.score + KO_SCORE
-	data.xp     = data.xp + XP_PER_KILL
+-- start or refresh a combat session
+function GameManager.StartCombat(attacker, targetPlayer)
+    if not attacker or not targetPlayer then return end
+    local uid = attacker.UserId
 
-	-- Level up every 200 XP
-	local xpNeeded = data.level * 200
-	if data.xp >= xpNeeded then
-		data.xp    = data.xp - xpNeeded
-		data.level = data.level + 1
-	end
+    local now = tick()
+    local session = combatSessions[uid]
 
-	-- Notify attacker of updated combat state
-	combatStateEvent:FireClient(attacker, {
-		kills  = data.kills,
-		deaths = data.deaths,
-		score  = data.score,
-		level  = data.level,
-		xp     = data.xp,
-	})
+    if session then
+        -- extend combo if within window
+        if (now - session.lastHitTime) <= COMBO_WINDOW then
+            session.combo = session.combo + 1
+        else
+            session.combo = 1
+        end
+        session.target      = targetPlayer
+        session.lastHitTime = now
+    else
+        combatSessions[uid] = {
+            target      = targetPlayer,
+            startTime   = now,
+            lastHitTime = now,
+            combo       = 1,
+        }
+        session = combatSessions[uid]
+    end
+
+    -- track total combos in persistent data
+    local data = playerDataCache[uid]
+    if data and session.combo > 1 then
+        data.combos = data.combos + 1
+    end
+
+    local damage = calculateDamage(uid)
+    applyDamage(attacker, targetPlayer, damage)
 end
 
--- Handle a combat hit request from a client
-combatEvent.OnServerEvent:Connect(function(attacker, targetPlayer, hitData)
-	-- Validate attacker
-	if not attacker or not attacker.Character then return end
-	if not attacker.Character:FindFirstChildOfClass("Humanoid") then return end
+-- end a combat session for a player
+function GameManager.EndCombat(userId)
+    combatSessions[userId] = nil
+end
 
-	-- Validate target
-	local targetCharacter
-	if typeof(targetPlayer) == "Instance" and targetPlayer:IsA("Player") then
-		targetCharacter = targetPlayer.Character
-	elseif typeof(targetPlayer) == "Instance" and targetPlayer:IsA("Model") then
-		targetCharacter = targetPlayer -- NPC support
-	end
+-- -----------------------------------------------------------------------
+-- PVP LOGIC
+-- -----------------------------------------------------------------------
 
-	if not targetCharacter then return end
-	local targetHumanoid = targetCharacter:FindFirstChildOfClass("Humanoid")
-	if not targetHumanoid or targetHumanoid.Health <= 0 then return end
+local PVP_ACCEPT_TIMEOUT = 30 -- seconds to accept a duel
+local PVP_DUEL_DURATION  = 120 -- max duel length in seconds
 
-	-- Sanity check: attacker and target must be reasonably close (anti-exploit)
-	local attackerRoot = attacker.Character:FindFirstChild("HumanoidRootPart")
-	local targetRoot   = targetCharacter:FindFirstChild("HumanoidRootPart")
-	if attackerRoot and targetRoot then
-		local dist = (attackerRoot.Position - targetRoot.Position).Magnitude
-		if dist > 20 then
-			warn("[GameManager] Combat hit rejected: too far (" .. dist .. " studs) for " .. attacker.Name)
-			return
-		end
-	end
+-- send a pvp challenge from challenger to opponent
+function GameManager.ChallengePvp(challenger, opponentPlayer)
+    if not challenger or not opponentPlayer then return end
+    if challenger.UserId == opponentPlayer.UserId then return end
 
-	-- Combo system
-	local cs   = getCombatState(attacker.UserId)
-	local now  = tick()
-	local elapsed = now - cs.lastHitTime
+    local cid = challenger.UserId
+    local oid = opponentPlayer.UserId
 
-	if elapsed <= COMBO_WINDOW then
-		cs.comboCount = cs.comboCount + 1
-	else
-		cs.comboCount = 1
-	end
-	cs.lastHitTime = now
-	cs.inCombat    = true
+    -- cancel any existing outgoing challenge
+    pvpDuels[cid] = {
+        opponentId  = oid,
+        accepted    = false,
+        startTime   = tick(),
+    }
 
-	local damage = BASE_DAMAGE + (cs.comboCount - 1) * COMBO_BONUS
+    pvpEvent:FireClient(challenger, {
+        action   = "ChallengeSent",
+        opponent = opponentPlayer.Name,
+    })
+    pvpEvent:FireClient(opponentPlayer, {
+        action     = "ChallengeReceived",
+        challenger = challenger.Name,
+    })
 
-	-- Apply damage
-	local remainingHealth = applyDamage(attacker, targetCharacter, damage)
+    -- auto-expire challenge
+    task.delay(PVP_ACCEPT_TIMEOUT, function()
+        local duel = pvpDuels[cid]
+        if duel and not duel.accepted and duel.opponentId == oid then
+            pvpDuels[cid] = nil
+            if Players:GetPlayerByUserId(cid) then
+                pvpEvent:FireClient(Players:GetPlayerByUserId(cid), { action = "ChallengeExpired" })
+            end
+            if Players:GetPlayerByUserId(oid) then
+                pvpEvent:FireClient(Players:GetPlayerByUserId(oid), { action = "ChallengeExpired" })
+            end
+        end
+    end)
+end
 
-	-- Fire damage event to all clients for visual feedback
-	dealDamageEvent:FireAllClients(attacker, targetCharacter, damage, cs.comboCount)
+-- opponent accepts a pvp challenge
+function GameManager.AcceptPvp(opponent, challengerPlayer)
+    if not opponent or not challengerPlayer then return end
+    local cid = challengerPlayer.UserId
+    local oid = opponent.UserId
 
-	-- Check if target was defeated
-	if remainingHealth ~= nil and remainingHealth <= 0 then
-		-- Award kill to attacker
-		awardKill(attacker)
+    local duel = pvpDuels[cid]
+    if not duel or duel.opponentId ~= oid or duel.accepted then return end
 
-		-- Record death for target player if applicable
-		local targetPlayerObj = Players:GetPlayerFromCharacter(targetCharacter)
-		if targetPlayerObj then
-			local tData = playerData[targetPlayerObj.UserId]
-			if tData then
-				tData.deaths = tData.deaths + 1
-			end
-			playerDiedEvent:FireAllClients(targetPlayerObj, attacker)
-		else
-			playerDiedEvent:FireAllClients(nil, attacker)
-		end
+    duel.accepted  = true
+    duel.startTime = tick()
 
-		-- Reset attacker combo after KO
-		cs.comboCount = 0
-		cs.inCombat   = false
-	end
+    -- mirror reference so both sides can look up the duel
+    pvpDuels[oid] = {
+        opponentId = cid,
+        accepted   = true,
+        startTime  = duel.startTime,
+        isMirror   = true,
+    }
+
+    pvpEvent:FireClient(challengerPlayer, {
+        action   = "DuelStarted",
+        opponent = opponent.Name,
+    })
+    pvpEvent:FireClient(opponent, {
+        action   = "DuelStarted",
+        opponent = challengerPlayer.Name,
+    })
+
+    -- auto-end duel after max duration
+    task.delay(PVP_DUEL_DURATION, function()
+        GameManager.EndPvp(cid, oid, "timeout")
+    end)
+end
+
+-- resolve a pvp duel
+function GameManager.EndPvp(playerAId, playerBId, reason)
+    local duelA = pvpDuels[playerAId]
+    local duelB = pvpDuels[playerBId]
+
+    -- only resolve if still active
+    if not duelA and not duelB then return end
+
+    pvpDuels[playerAId] = nil
+    pvpDuels[playerBId] = nil
+
+    local playerA = Players:GetPlayerByUserId(playerAId)
+    local playerB = Players:GetPlayerByUserId(playerBId)
+
+    if playerA then
+        pvpEvent:FireClient(playerA, { action = "DuelEnded", reason = reason })
+    end
+    if playerB then
+        pvpEvent:FireClient(playerB, { action = "DuelEnded", reason = reason })
+    end
+end
+
+-- declare a winner for a pvp duel
+function GameManager.DeclarePvpWinner(winnerId, loserId)
+    local winnerData = playerDataCache[winnerId]
+    local loserData  = playerDataCache[loserId]
+    if winnerData then winnerData.wins   = winnerData.wins   + 1 end
+    if loserData  then loserData.losses  = loserData.losses  + 1 end
+
+    local winner = Players:GetPlayerByUserId(winnerId)
+    local loser  = Players:GetPlayerByUserId(loserId)
+    if winner then pvpEvent:FireClient(winner, { action = "DuelWon"  }) end
+    if loser  then pvpEvent:FireClient(loser,  { action = "DuelLost" }) end
+
+    GameManager.EndPvp(winnerId, loserId, "decided")
+end
+
+-- -----------------------------------------------------------------------
+-- REMOTE EVENT HANDLERS (client → server)
+-- -----------------------------------------------------------------------
+
+combatEvent.OnServerEvent:Connect(function(player, payload)
+    if type(payload) ~= "table" then return end
+
+    if payload.action == "Attack" then
+        -- payload.targetName: name of the target player
+        local targetPlayer = Players:FindFirstChild(payload.targetName)
+        if targetPlayer and targetPlayer ~= player then
+            GameManager.StartCombat(player, targetPlayer)
+        end
+
+    elseif payload.action == "StopCombat" then
+        GameManager.EndCombat(player.UserId)
+    end
 end)
 
--- Reset combo if window expires (polled periodically)
-RunService.Heartbeat:Connect(function()
-	local now = tick()
-	for userId, cs in pairs(combatState) do
-		if cs.inCombat and (now - cs.lastHitTime) > COMBO_WINDOW then
-			cs.comboCount = 0
-			cs.inCombat   = false
-		end
-	end
+pvpEvent.OnServerEvent:Connect(function(player, payload)
+    if type(payload) ~= "table" then return end
+
+    if payload.action == "Challenge" then
+        local opponent = Players:FindFirstChild(payload.opponentName)
+        if opponent then
+            GameManager.ChallengePvp(player, opponent)
+        end
+
+    elseif payload.action == "Accept" then
+        local challenger = Players:FindFirstChild(payload.challengerName)
+        if challenger then
+            GameManager.AcceptPvp(player, challenger)
+        end
+
+    elseif payload.action == "Forfeit" then
+        local duel = pvpDuels[player.UserId]
+        if duel and duel.accepted then
+            GameManager.DeclarePvpWinner(duel.opponentId, player.UserId)
+        end
+    end
 end)
 
--- =====================
+-- -----------------------------------------------------------------------
 -- PLAYER LIFECYCLE
--- =====================
+-- -----------------------------------------------------------------------
 
 Players.PlayerAdded:Connect(function(player)
-	loadPlayerData(player)
+    local userId = player.UserId
 
-	-- Spawn character at configured spawn point
-	player.CharacterAdded:Connect(function(character)
-		-- Re-initialize combat state on respawn
-		combatState[player.UserId] = {
-			inCombat    = false,
-			comboCount  = 0,
-			lastHitTime = 0,
-		}
+    -- load persistent data
+    local data = loadData(userId)
+    playerDataCache[userId] = data
 
-		-- Send initial combat state to client
-		local data = playerData[player.UserId]
-		if data then
-			combatStateEvent:FireClient(player, {
-				kills  = data.kills,
-				deaths = data.deaths,
-				score  = data.score,
-				level  = data.level,
-				xp     = data.xp,
-			})
-		end
-	end)
+    -- spawn at WorldConfig default area
+    player.CharacterAdded:Connect(function()
+        task.wait() -- brief wait for physics init
+        spawnCharacter(player)
+    end)
 
-	-- Spawn immediately if character already exists
-	if player.Character then
-		spawnPlayerAtSpawn(player)
-	end
+    -- if character already exists (rare but possible), spawn now
+    if player.Character then
+        spawnCharacter(player)
+    else
+        player:LoadCharacter()
+    end
 
-	player.CharacterAdded:Connect(function()
-		spawnPlayerAtSpawn(player)
-	end)
+    -- watch for death to handle pvp resolution
+    player.CharacterAdded:Connect(function(character)
+        local humanoid = character:WaitForChild("Humanoid", 10)
+        if not humanoid then return end
+
+        humanoid.Died:Connect(function()
+            -- resolve active pvp duel if any
+            local duel = pvpDuels[userId]
+            if duel and duel.accepted and not duel.isMirror then
+                GameManager.DeclarePvpWinner(duel.opponentId, userId)
+            end
+            -- clear combat session on death
+            GameManager.EndCombat(userId)
+        end)
+    end)
 end)
 
 Players.PlayerRemoving:Connect(function(player)
-	savePlayerData(player)
-	playerData[player.UserId]   = nil
-	combatState[player.UserId]  = nil
+    local userId = player.UserId
+    saveData(userId)
+    playerDataCache[userId] = nil
+    combatSessions[userId]  = nil
+    pvpDuels[userId]        = nil
 end)
 
--- Save all players on server shutdown
+-- save all players on server shutdown
 game:BindToClose(function()
-	for _, player in ipairs(Players:GetPlayers()) do
-		savePlayerData(player)
-	end
+    for userId, _ in pairs(playerDataCache) do
+        saveData(userId)
+    end
 end)
 
--- =====================
--- GAMEMANAGER MODULE API
--- =====================
+-- -----------------------------------------------------------------------
+-- PUBLIC API
+-- -----------------------------------------------------------------------
 
-local GameManager = {}
-
--- Get a copy of a player's current data
-function GameManager.GetPlayerData(player)
-	if not player then return nil end
-	local data = playerData[player.UserId]
-	if not data then return nil end
-	-- Return a shallow copy to prevent external mutation
-	local copy = {}
-	for k, v in pairs(data) do copy[k] = v end
-	return copy
+function GameManager.GetPlayerData(userId)
+    return playerDataCache[userId]
 end
 
--- Manually add score to a player (e.g. for objective completion)
-function GameManager.AddScore(player, amount)
-	if not player then return end
-	local data = playerData[player.UserId]
-	if not data then return end
-	data.score = data.score + (amount or 0)
-	combatStateEvent:FireClient(player, {
-		kills  = data.kills,
-		deaths = data.deaths,
-		score  = data.score,
-		level  = data.level,
-		xp     = data.xp,
-	})
+function GameManager.SetPlayerData(userId, key, value)
+    local data = playerDataCache[userId]
+    if data then
+        data[key] = value
+    end
 end
 
--- Manually add XP to a player
-function GameManager.AddXP(player, amount)
-	if not player then return end
-	local data = playerData[player.UserId]
-	if not data then return end
-	data.xp = data.xp + (amount or 0)
-	local xpNeeded = data.level * 200
-	if data.xp >= xpNeeded then
-		data.xp    = data.xp - xpNeeded
-		data.level = data.level + 1
-	end
-	combatStateEvent:FireClient(player, {
-		kills  = data.kills,
-		deaths = data.deaths,
-		score  = data.score,
-		level  = data.level,
-		xp     = data.xp,
-	})
+function GameManager.GetCombatSession(userId)
+    return combatSessions[userId]
 end
 
--- Get current combat state for a player
-function GameManager.GetCombatState(player)
-	if not player then return nil end
-	local cs = combatState[player.UserId]
-	if not cs then return nil end
-	return {
-		inCombat   = cs.inCombat,
-		comboCount = cs.comboCount,
-	}
-end
-
--- Force save a specific player's data
-function GameManager.SavePlayer(player)
-	savePlayerData(player)
-end
-
--- Teleport a player back to spawn
-function GameManager.RespawnAtSpawn(player)
-	if not player then return end
-	player:LoadCharacter()
-end
-
--- Broadcast a message to all clients via combatStateEvent (reuse channel)
-function GameManager.BroadcastCombatState(player)
-	if not player then return end
-	local data = playerData[player.UserId]
-	if not data then return end
-	combatStateEvent:FireAllClients({
-		player = player.Name,
-		kills  = data.kills,
-		deaths = data.deaths,
-		score  = data.score,
-		level  = data.level,
-	})
+function GameManager.GetPvpDuel(userId)
+    return pvpDuels[userId]
 end
 
 return GameManager
