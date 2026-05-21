@@ -1,180 +1,153 @@
 local MarketplaceService = game:GetService("MarketplaceService")
 local Players = game:GetService("Players")
-local DataStoreService = game:GetService("DataStoreService")
 
--- DataStore for tracking purchase receipts (prevent duplicate processing)
-local purchaseStore = DataStoreService:GetDataStore("route_rage_purchases")
+local module = {}
 
-local Monetisation = {}
-
--- ============================================================
--- GAMEPASS DEFINITIONS
--- ============================================================
-Monetisation.GAMEPASSES = {
-	DoubleXP = {
+-- Gamepass definitions relevant to a Rainbow Dash puzzle game
+local GAMEPASSES = {
+	HintBoost = {
 		id = GAMEPASS_ID_PLACEHOLDER,
-		name = "DoubleXP",
-		description = "Earn 2x XP from every race and takedown",
+		name = "Hint Boost",
+		description = "Receive double hints on every puzzle level.",
 	},
-	NitroBoost = {
+	SkipPuzzle = {
 		id = GAMEPASS_ID_PLACEHOLDER,
-		name = "NitroBoost",
-		description = "Unlocks permanent nitro boost ability for all vehicles",
+		name = "Puzzle Skip",
+		description = "Unlocks the ability to skip one puzzle per session.",
 	},
-	VIPGarage = {
+	ColorblindMode = {
 		id = GAMEPASS_ID_PLACEHOLDER,
-		name = "VIPGarage",
-		description = "Access to exclusive VIP vehicles and cosmetics",
+		name = "Colorblind Mode",
+		description = "Activates high-contrast color schemes for all puzzles.",
 	},
 }
 
--- ============================================================
--- DEVPRODUCT DEFINITIONS
--- ============================================================
-Monetisation.DEVPRODUCTS = {
-	CashBundle = {
+-- DevProduct definitions for one-time consumable purchases
+local DEVPRODUCTS = {
+	ExtraHints = {
 		id = DEVPRODUCT_ID_PLACEHOLDER,
-		name = "CashBundle",
-		description = "Instantly receive 5,000 in-game cash",
-		cashReward = 5000,
+		name = "Extra Hints Pack",
+		description = "Grants 5 additional hints immediately.",
+		reward = 5, -- number of hints awarded
 	},
-	RepairKit = {
+	RainbowBoost = {
 		id = DEVPRODUCT_ID_PLACEHOLDER,
-		name = "RepairKit",
-		description = "Fully repair your vehicle and restore all armour",
-		cashReward = 0,
+		name = "Rainbow Boost",
+		description = "Temporarily doubles your score multiplier for 10 minutes.",
+		duration = 600, -- seconds
 	},
-	TurboFuel = {
+	PuzzleSolveToken = {
 		id = DEVPRODUCT_ID_PLACEHOLDER,
-		name = "TurboFuel",
-		description = "Grants 10 turbo charges to use across any session",
-		turboCharges = 10,
+		name = "Solve Token",
+		description = "Instantly solves the current puzzle without penalty.",
+		reward = 1,
 	},
 }
 
--- Build a quick lookup from product ID to product config
-local productIdMap = {}
-for _, product in pairs(Monetisation.DEVPRODUCTS) do
-	productIdMap[product.id] = product
-end
+module.GAMEPASSES = GAMEPASSES
+module.DEVPRODUCTS = DEVPRODUCTS
 
--- ============================================================
--- hasPremiumPass
--- Returns true if the player owns the named gamepass, false otherwise
--- ============================================================
-function Monetisation.hasPremiumPass(player, passName)
-	local passData = Monetisation.GAMEPASSES[passName]
+-- Check if a player owns a named gamepass; returns bool and logs errors
+function module.hasPremiumPass(player, passName)
+	local passData = GAMEPASSES[passName]
 	if not passData then
 		warn("[Monetisation] Unknown pass name: " .. tostring(passName))
 		return false
 	end
 
-	local success, owned = pcall(function()
+	local success, result = pcall(function()
 		return MarketplaceService:UserOwnsGamePassAsync(player.UserId, passData.id)
 	end)
 
 	if not success then
-		warn("[Monetisation] UserOwnsGamePassAsync failed for " .. player.Name .. ": " .. tostring(owned))
+		warn("[Monetisation] UserOwnsGamePassAsync failed for " .. player.Name .. ": " .. tostring(result))
 		return false
 	end
 
-	return owned
+	return result
 end
 
--- ============================================================
--- Helper: grant DevProduct rewards to a player
--- ============================================================
-local function grantProductRewards(player, product)
-	if product.name == "CashBundle" then
-		-- Fire to a cash-update RemoteEvent or adjust leaderstats directly
-		local leaderstats = player:FindFirstChild("leaderstats")
-		if leaderstats then
-			local cash = leaderstats:FindFirstChild("Cash")
-			if cash then
-				cash.Value = cash.Value + product.cashReward
+-- Build a reverse lookup: productId -> key, for use in ProcessReceipt
+local productIdToKey = {}
+for key, data in pairs(DEVPRODUCTS) do
+	productIdToKey[data.id] = key
+end
+
+-- Handler functions per DevProduct; return true to confirm purchase
+local receiptHandlers = {
+
+	ExtraHints = function(player)
+		-- Award hints via a leaderstats or data module; placeholder logic here
+		local hints = player:FindFirstChild("Hints") -- example stat
+		if hints then
+			hints.Value = hints.Value + DEVPRODUCTS.ExtraHints.reward
+		end
+		print("[Monetisation] Awarded " .. DEVPRODUCTS.ExtraHints.reward .. " hints to " .. player.Name)
+		return true
+	end,
+
+	RainbowBoost = function(player)
+		-- Signal a boost to gameplay systems; placeholder logic here
+		print("[Monetisation] Activated Rainbow Boost for " .. player.Name
+			.. " (" .. DEVPRODUCTS.RainbowBoost.duration .. "s)")
+		-- Fire a RemoteEvent or set an attribute to notify client/server systems
+		local remotes = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+		if remotes then
+			local boostEvent = remotes:FindFirstChild("ActivateRainbowBoost")
+			if boostEvent then
+				boostEvent:FireClient(player, DEVPRODUCTS.RainbowBoost.duration)
 			end
 		end
+		return true
+	end,
 
-	elseif product.name == "RepairKit" then
-		-- Signal the vehicle system to fully repair this player
-		local repairEvent = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
-			and game:GetService("ReplicatedStorage").Remotes:FindFirstChild("RepairVehicle")
-		if repairEvent then
-			repairEvent:FireClient(player)
+	PuzzleSolveToken = function(player)
+		-- Grant a solve token; placeholder logic here
+		print("[Monetisation] Granted Solve Token to " .. player.Name)
+		local remotes = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+		if remotes then
+			local tokenEvent = remotes:FindFirstChild("GrantSolveToken")
+			if tokenEvent then
+				tokenEvent:FireClient(player, DEVPRODUCTS.PuzzleSolveToken.reward)
+			end
 		end
+		return true
+	end,
+}
 
-	elseif product.name == "TurboFuel" then
-		-- Signal the turbo system to grant charges
-		local turboEvent = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
-			and game:GetService("ReplicatedStorage").Remotes:FindFirstChild("GrantTurbo")
-		if turboEvent then
-			turboEvent:FireClient(player, product.turboCharges)
-		end
-	end
-end
-
--- ============================================================
--- ProcessReceipt handler
--- Roblox calls this when a DevProduct purchase is completed
--- ============================================================
+-- ProcessReceipt is called by Roblox when a DevProduct purchase is completed
 MarketplaceService.ProcessReceipt = function(receiptInfo)
-	local playerId = receiptInfo.PlayerId
-	local productId = receiptInfo.ProductId
-	local purchaseId = receiptInfo.PurchaseId
+	local productKey = productIdToKey[receiptInfo.ProductId]
 
-	-- Prevent duplicate processing using a DataStore receipt key
-	local receiptKey = "receipt_" .. tostring(purchaseId)
-	local alreadyProcessed = false
-
-	local checkSuccess, checkResult = pcall(function()
-		return purchaseStore:GetAsync(receiptKey)
-	end)
-
-	if checkSuccess and checkResult == true then
-		alreadyProcessed = true
-	end
-
-	if alreadyProcessed then
-		-- Already granted; acknowledge without re-granting
-		return Enum.ProductPurchaseDecision.PurchaseGranted
-	end
-
-	-- Find the product config
-	local product = productIdMap[productId]
-	if not product then
-		warn("[Monetisation] Received unknown product ID: " .. tostring(productId))
+	if not productKey then
+		-- Unknown product; do not grant and do not confirm (investigate manually)
+		warn("[Monetisation] Unknown ProductId: " .. tostring(receiptInfo.ProductId))
 		return Enum.ProductPurchaseDecision.NotProcessedYet
 	end
 
-	-- Find the player instance (they may have left)
-	local player = Players:GetPlayerByUserId(playerId)
+	-- Wait briefly for the player to be fully loaded in the game
+	local player = Players:GetPlayerByUserId(receiptInfo.PlayerId)
 	if not player then
-		-- Player not in server; retry next time they join
+		-- Player left mid-purchase; defer so Roblox retries on rejoin
 		return Enum.ProductPurchaseDecision.NotProcessedYet
 	end
 
-	-- Grant the rewards
-	local grantSuccess, grantErr = pcall(function()
-		grantProductRewards(player, product)
-	end)
-
-	if not grantSuccess then
-		warn("[Monetisation] Failed to grant rewards for " .. product.name .. ": " .. tostring(grantErr))
+	local handler = receiptHandlers[productKey]
+	if not handler then
+		warn("[Monetisation] No handler for product: " .. productKey)
 		return Enum.ProductPurchaseDecision.NotProcessedYet
 	end
 
-	-- Mark receipt as processed in DataStore
-	local saveSuccess, saveErr = pcall(function()
-		purchaseStore:SetAsync(receiptKey, true)
-	end)
+	local success, result = pcall(handler, player)
 
-	if not saveSuccess then
-		warn("[Monetisation] Failed to save receipt " .. receiptKey .. ": " .. tostring(saveErr))
-		-- Do not grant again but we already did; still acknowledge to avoid double charge
-		-- In production consider a retry queue here
+	if success and result then
+		-- Confirm purchase; Roblox will not re-fire this receipt
+		return Enum.ProductPurchaseDecision.PurchaseGranted
+	else
+		-- Something went wrong; allow Roblox to retry later
+		warn("[Monetisation] Handler error for " .. productKey .. ": " .. tostring(result))
+		return Enum.ProductPurchaseDecision.NotProcessedYet
 	end
-
-	return Enum.ProductPurchaseDecision.PurchaseGranted
 end
 
-return Monetisation
+return module
