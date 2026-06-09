@@ -1,0 +1,26 @@
+name: Rojo validate
+
+on:
+  pull_request:
+    paths:
+      - 'roblox_games/**'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rojo
+        run: |
+          curl -sL https://github.com/rojo-rbx/rojo/releases/download/v7.4.4/rojo-7.4.4-linux-x86_64.zip -o rojo.zip
+          unzip rojo.zip
+          chmod +x rojo
+          sudo mv rojo /usr/local/bin/
+      - name: Build each game project
+        run: |
+          shopt -s nullglob
+          for proj in roblox_games/*/default.project.json; do
+            dir=$(dirname "$proj")
+            echo "Building $dir"
+            rojo build "$proj" --output /tmp/test.rbxl
+          done
