@@ -1,0 +1,12 @@
+{
+  "name": "huntrix-rainbow-carpet-obby-for-5yo-flying-stars",
+  "tree": {
+    "$className": "DataModel",
+    "ServerScriptService": { "$path": "ServerScriptService" },
+    "ReplicatedStorage": { "$path": "ReplicatedStorage" },
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "StarterPlayerScripts": { "$path": "StarterPlayer/StarterPlayerScripts" }
+    }
+  }
+}
