@@ -1,6 +1,0 @@
-std = "roblox"
-
-[lints]
-global_usage = "warn"
-empty_if = "allow"
-incorrect_standard_library_use = "warn"
