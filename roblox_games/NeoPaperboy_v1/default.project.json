@@ -1,0 +1,12 @@
+{
+  "name": "NeoPaperboy_v1",
+  "tree": {
+    "$className": "DataModel",
+    "ServerScriptService": { "$path": "ServerScriptService" },
+    "ReplicatedStorage": { "$path": "ReplicatedStorage" },
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "StarterPlayerScripts": { "$path": "StarterPlayer/StarterPlayerScripts" }
+    }
+  }
+}
